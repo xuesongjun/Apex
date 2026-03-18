@@ -1,0 +1,53 @@
+# A股炒股系统 - 策略参数配置
+
+strategies:
+  # 均线交叉策略
+  ma_cross:
+    enabled: true
+    short_period: 5     # 短期均线周期
+    long_period: 20     # 长期均线周期
+    ma_type: "EMA"      # 均线类型：SMA / EMA
+
+  # MACD 策略
+  macd:
+    enabled: true
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+
+  # KDJ 策略
+  kdj:
+    enabled: false
+    k_period: 9
+    d_period: 3
+    j_period: 3
+    overbought: 80      # 超买阈值
+    oversold: 20        # 超卖阈值
+
+  # 布林带策略
+  bollinger:
+    enabled: false
+    period: 20
+    std_dev: 2.0
+
+  # RSI 策略
+  rsi:
+    enabled: false
+    period: 14
+    overbought: 70
+    oversold: 30
+
+# 股票池配置
+stock_pool:
+  # 指数成分股（默认沪深300）
+  index_code: "000300"
+  # 排除规则
+  exclude:
+    - st          # 排除 ST 股票
+    - star_st     # 排除 *ST 股票
+    - new_stock   # 排除上市不足60天的新股
+    - suspended   # 排除停牌股票
+  # 自定义黑名单（股票代码）
+  blacklist: []
+  # 自定义白名单（仅交易这些股票，为空则不限制）
+  whitelist: []

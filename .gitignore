@@ -1,0 +1,78 @@
+# ========== Python ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# ========== IDE ==========
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# ========== 数据库 ==========
+# SQLite 数据库文件（开发环境本地生成）
+*.db
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ========== 数据文件 ==========
+# 本地数据缓存（CSV/Parquet 等）
+data/*.csv
+data/*.parquet
+data/*.pkl
+data/*.h5
+
+# ========== 日志 ==========
+logs/
+*.log
+
+# ========== 敏感配置 ==========
+# 包含 API Token 的本地配置（不要提交到仓库）
+config/settings.local.yaml
+.env
+.env.*
+!.env.example
+
+# ========== 回测输出 ==========
+# 回测报告和图表
+output/
+reports/
+*.png
+*.jpg
+*.html
+!README.md
+
+# ========== 系统文件 ==========
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========== 测试 ==========
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ========== Jupyter ==========
+.ipynb_checkpoints/
+
+# ========== Claude Code ==========
+.claude/

@@ -1,0 +1,100 @@
+# A股炒股系统 - 全局配置
+
+# 数据库配置
+database:
+  # PostgreSQL 连接（推荐使用 TimescaleDB 扩展）
+  url: "postgresql://postgres:password@localhost:5432/stock_trading"
+  # SQLite 备选（开发环境，无需安装 PostgreSQL）
+  sqlite_url: "sqlite:///data/stock_trading.db"
+  # 默认使用 sqlite（开发阶段），生产环境切换为 postgresql
+  engine: "sqlite"
+  echo: false  # 是否打印 SQL 日志
+
+# 数据源配置
+data_sources:
+  # AKShare（免费，无需 token）
+  akshare:
+    enabled: true
+    retry_times: 3
+    retry_delay: 5  # 秒
+    request_interval: 0.5  # 请求间隔（秒），避免被限频
+
+  # Tushare（需要注册获取 token）
+  tushare:
+    enabled: false  # 默认关闭，需要配置 token 后开启
+    token: ""  # 在此填入你的 Tushare token
+    retry_times: 3
+    retry_delay: 5
+
+  # 优先级：优先使用 akshare，失败时回退到 tushare
+  priority: ["akshare", "tushare"]
+
+# 交易规则
+trading_rules:
+  # 佣金费率（万分之2.5）
+  commission_rate: 0.00025
+  # 最低佣金（元）
+  min_commission: 5.0
+  # 印花税（千分之1，仅卖出收取）
+  stamp_tax_rate: 0.001
+  # 过户费（万分之0.2）
+  transfer_fee_rate: 0.00002
+  # 最小交易单位（股）
+  min_trade_unit: 100
+
+  # 涨跌停规则
+  price_limit:
+    main_board: 0.10       # 主板 ±10%
+    gem: 0.20              # 创业板 ±20% (Growth Enterprise Market)
+    star: 0.20             # 科创板 ±20% (STAR Market)
+    bse: 0.30              # 北交所 ±30%
+    st: 0.05               # ST 股票 ±5%
+
+# 风控参数
+risk_control:
+  # 单票最大仓位（占总资金比例）
+  max_single_position: 0.20
+  # 单行业最大仓位
+  max_sector_position: 0.30
+  # 总仓位上限
+  max_total_position: 0.80
+  # 个股止损线
+  stop_loss_pct: -0.07
+  # 个股止盈线
+  take_profit_pct: 0.20
+  # 单日最大亏损
+  max_daily_loss: -0.03
+  # 最大回撤阈值（触发后暂停策略）
+  max_drawdown: -0.10
+
+# 回测默认参数
+backtest:
+  # 初始资金（元）
+  initial_capital: 1000000.0
+  # 基准指数
+  benchmark: "000300"  # 沪深300
+  # 滑点（元）
+  slippage: 0.01
+
+# 日志配置
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  rotation: "10 MB"
+  retention: "30 days"
+
+# 通知配置（可选）
+notification:
+  # 钉钉机器人
+  dingtalk:
+    enabled: false
+    webhook: ""
+    secret: ""
+  # 邮件
+  email:
+    enabled: false
+    smtp_server: ""
+    smtp_port: 465
+    sender: ""
+    password: ""
+    receiver: ""
