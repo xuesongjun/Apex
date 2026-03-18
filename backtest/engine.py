@@ -345,10 +345,25 @@ class BacktestResult:
     def print_summary(self):
         """打印回测摘要报告"""
         m = self.metrics
+
+        # 获取期末账户数据
+        final = self.equity_curve[-1] if self.equity_curve else {}
+        initial_capital = self.equity_curve[0]["total_equity"] if self.equity_curve else 0
+        final_equity = final.get("total_equity", 0)
+        final_cash = final.get("cash", 0)
+        final_market_value = final.get("market_value", 0)
+
         print("\n" + "=" * 60)
         print(f"  回测报告: {self.strategy_name}")
         print(f"  区间: {self.start_date} ~ {self.end_date}")
         print("=" * 60)
+
+        print("\n【账户概览】")
+        print(f"  初始资金:      {initial_capital:>14,.2f}")
+        print(f"  期末总资产:    {final_equity:>14,.2f}")
+        print(f"  期末现金:      {final_cash:>14,.2f}")
+        print(f"  期末持仓市值:  {final_market_value:>14,.2f}")
+        print(f"  总盈亏:        {final_equity - initial_capital:>+14,.2f}")
 
         print("\n【收益指标】")
         print(f"  总收益率:      {m.total_return:>10.2f}%")
@@ -376,8 +391,9 @@ class BacktestResult:
         print(f"  最大连亏:      {m.max_consecutive_losses:>10d}")
 
         print("\n【费用统计】")
-        print(f"  总手续费:      {m.total_commission:>10.2f}")
-        print(f"  总印花税:      {m.total_tax:>10.2f}")
+        print(f"  总手续费:      {m.total_commission:>14,.2f}")
+        print(f"  总印花税:      {m.total_tax:>14,.2f}")
+        print(f"  费用合计:      {m.total_commission + m.total_tax:>14,.2f}")
         print("=" * 60 + "\n")
 
     def get_equity_df(self) -> pd.DataFrame:

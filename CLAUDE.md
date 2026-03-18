@@ -43,7 +43,8 @@ a-stock-trading-system/
 ├── scripts/
 │   ├── init_db.py              # 数据库初始化脚本
 │   ├── daily_update.py         # 每日数据更新脚本
-│   └── run_backtest.py         # 回测运行入口
+│   ├── run_backtest.py         # 回测运行入口
+│   └── query_stock.py          # 数据查询验证工具
 ├── requirements.txt
 └── plan.md                     # 完整设计规划文档
 ```
@@ -84,6 +85,15 @@ python scripts/run_backtest.py --strategy macd --codes 000001 --start 2023-01-01
 
 # 自定义策略参数
 python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --params short_period=10 long_period=30
+
+# 查询股票数据 - 从本地数据库（默认）
+python scripts/query_stock.py -c 000001 -s 2023-01-03 -e 2023-01-10
+
+# 查询股票数据 - 从网络接口
+python scripts/query_stock.py -c 000001 -s 2023-01-03 -e 2023-01-10 --source api
+
+# 查询股票数据 - 对比本地和网络
+python scripts/query_stock.py -c 000001 -s 2023-01-03 -e 2023-01-10 --source both
 ```
 
 ## 代码风格
@@ -126,8 +136,7 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 
 ### 已知问题
 
-- 尚未实际运行测试，需先安装依赖并拉取数据验证
-- AKShare 接口可能因版本更新导致字段名变化，需关注兼容性
+- AKShare 东方财富(eastmoney)系列接口在部分网络环境下不可用，已全部替换为新浪源接口
 - 数据库默认使用 SQLite（开发阶段），大数据量场景需切换 PostgreSQL
 
 ### 2026-03-18 进度记录
@@ -167,12 +176,34 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 #### 断点 / 待续
 - 下次从 **Phase 3（策略库扩展）** 开始，在 `strategy/technical/` 目录下新增 KDJ、布林带、RSI 策略
 - 或者先做 **Phase 4（风控模块）**，在 `risk/rules/` 下实现仓位控制、止损规则
-- 建议先实际安装依赖运行一次 `init_db.py` 拉取数据，再运行 `run_backtest.py` 验证完整流程
+- 数据拉取中（5490 只股票），支持断点续传，中断后重新运行 `init_db.py` 会自动跳过已入库股票
 
 #### 运行命令 / 备忘
 ```bash
 pip install -r requirements.txt
 python scripts/init_db.py --tables-only        # 先创建表验证 ORM
-python scripts/init_db.py --start 2023-01-01   # 拉取历史数据
+python scripts/init_db.py --start 2023-01-01   # 拉取历史数据（支持断点续传）
 python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01
+python scripts/query_stock.py -c 000001 -s 2026-03-15  # 查询验证数据
 ```
+
+### 2026-03-18 第二次进度记录
+
+#### 本次完成
+- 修复 AKShare 数据源：东方财富接口在公司网络环境下全部不可用，替换为新浪源接口
+- 为请求增加 30 秒超时控制（`concurrent.futures.ThreadPoolExecutor`），防止卡死
+- 新增数据查询验证脚本 `scripts/query_stock.py`，支持从本地数据库/网络接口/对比查询
+
+#### 关键变更
+| 文件 | 变更类型 | 说明 |
+|------|---------|------|
+| `data/sources/akshare_source.py` | 修复 | 全部接口从东财源替换为新浪源：`stock_zh_a_spot_em`→`stock_info_a_code_name`、`stock_zh_a_hist`→`stock_zh_a_daily`、`stock_zh_index_daily_em`→`stock_zh_index_daily`；新增 30s 超时控制 |
+| `scripts/query_stock.py` | 新功能 | 数据查询验证工具，支持 `--source db/api/both` 三种模式 |
+
+#### AKShare 接口映射（新浪源）
+| 用途 | 接口函数 | 数据源 |
+|------|---------|--------|
+| 股票列表 | `stock_info_a_code_name` | 新浪 |
+| 个股日K线 | `stock_zh_a_daily` | 新浪 |
+| 指数日K线 | `stock_zh_index_daily` | 新浪 |
+| 交易日历 | `tool_trade_date_hist_sina` | 新浪 |

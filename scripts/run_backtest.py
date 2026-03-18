@@ -149,13 +149,64 @@ def main():
     result = engine.run()
     result.print_summary()
 
-    # 打印交易明细（前20条）
+    # 打印交易明细
     trades_df = result.get_trades_df()
     if not trades_df.empty:
-        print("\n【交易明细（最近20笔）】")
-        print(trades_df.tail(20).to_string(index=False))
+        _print_trades(trades_df.tail(20), len(result.trades))
+    else:
+        print("无交易记录")
 
-    print(f"\n提示: 共 {len(result.trades)} 笔交易")
+
+def _pad_str(s: str, width: int, align: str = ">") -> str:
+    """按显示宽度对齐（中文占2列）"""
+    import unicodedata
+    display_width = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+    padding = max(0, width - display_width)
+    if align == ">":
+        return " " * padding + s
+    elif align == "<":
+        return s + " " * padding
+    else:
+        left = padding // 2
+        return " " * left + s + " " * (padding - left)
+
+
+def _print_trades(df, total_count: int):
+    """格式化打印交易明细"""
+    show_count = len(df)
+    print(f"\n【交易明细】（显示最近 {show_count} 笔，共 {total_count} 笔）")
+
+    # 列定义: (表头, 宽度)
+    cols = [
+        ("代码", 8), ("买入日", 12), ("卖出日", 12), ("买入价", 8),
+        ("卖出价", 8), ("数量(股)", 10), ("盈亏", 12),
+        ("收益率%", 8), ("持仓天数", 8), ("卖出原因", 38),
+    ]
+
+    sep = "+" + "+".join("-" * w for _, w in cols) + "+"
+    header = "|" + "|".join(_pad_str(name, w, "^") for name, w in cols) + "|"
+
+    print(sep)
+    print(header)
+    print(sep)
+
+    for _, row in df.iterrows():
+        values = [
+            row.get("code", ""),
+            str(row.get("buy_date", "")),
+            str(row.get("sell_date", "")),
+            f"{row.get('buy_price', 0):.2f}",
+            f"{row.get('sell_price', 0):.2f}",
+            f"{row.get('volume', 0):,d}",
+            f"{row.get('profit', 0):+,.2f}",
+            f"{row.get('profit_pct', 0):+.2f}",
+            str(row.get("holding_days", 0)),
+            str(row.get("reason", "")),
+        ]
+        line = "|" + "|".join(_pad_str(val, w) for val, (_, w) in zip(values, cols)) + "|"
+        print(line)
+
+    print(sep)
 
 
 if __name__ == "__main__":

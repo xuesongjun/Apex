@@ -52,7 +52,8 @@ A股量化交易系统，涵盖行情数据采集、策略引擎、回测框架�
 ├── scripts/                    # 运行脚本
 │   ├── init_db.py              # 数据库初始化
 │   ├── daily_update.py         # 每日数据更新
-│   └── run_backtest.py         # 回测运行入口
+│   ├── run_backtest.py         # 回测运行入口
+│   └── query_stock.py          # 数据查询验证工具
 └── requirements.txt
 ```
 
@@ -108,7 +109,20 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
     --capital 500000
 ```
 
-### 4. 每日数据更新
+### 4. 查询验证数据
+
+```bash
+# 从本地数据库查询（默认）
+python scripts/query_stock.py -c 000001 -s 2023-01-03 -e 2023-01-10
+
+# 从网络接口实时查询
+python scripts/query_stock.py -c 000001 -s 2023-01-03 -e 2023-01-10 --source api
+
+# 对比本地与网络数据，验证正确性
+python scripts/query_stock.py -c 000001 -s 2023-01-03 -e 2023-01-10 --source both
+```
+
+### 5. 每日数据更新
 
 ```bash
 # 常规增量更新（每个交易日收盘后运行）
