@@ -94,9 +94,9 @@ class BacktestEngine:
             bars_today = all_bars[td]
             signals: list[Signal] = []
 
-            # 更新持仓价格
-            price_map = {bar.code: bar.close for bar in bars_today}
-            self.account.update_prices(price_map)
+            # 构建当日 K 线字典（code → bar），price_map 顺带生成
+            bar_map: dict[str, BarData] = {bar.code: bar for bar in bars_today}
+            self.account.update_prices({code: bar.close for code, bar in bar_map.items()})
 
             # 同步账户状态给策略
             self.strategy._sync_account(
@@ -117,9 +117,9 @@ class BacktestEngine:
             buy_signals = [s for s in signals if s.direction == Direction.BUY]
 
             for signal in sell_signals:
-                self._process_signal(signal, bars_today)
+                self._process_signal(signal, bar_map)
             for signal in buy_signals:
-                self._process_signal(signal, bars_today)
+                self._process_signal(signal, bar_map)
 
             # 记录当日资产
             self.account.record_equity(td)
@@ -177,14 +177,9 @@ class BacktestEngine:
 
         return all_bars
 
-    def _process_signal(self, signal: Signal, bars_today: list[BarData]):
+    def _process_signal(self, signal: Signal, bar_map: dict[str, BarData]):
         """处理交易信号：验证 → 撮合 → 成交"""
-        # 找到对应的K线
-        bar = None
-        for b in bars_today:
-            if b.code == signal.code:
-                bar = b
-                break
+        bar = bar_map.get(signal.code)
         if bar is None:
             return
 

@@ -72,13 +72,18 @@ class AKShareSource(BaseDataSource):
 
     def _detect_market(self, code: str) -> str:
         """根据代码前缀判断市场"""
-        if code.startswith("6"):
-            return "SH"
-        elif code.startswith("0") or code.startswith("3"):
-            return "SZ"
+        if code.startswith("6") or code.startswith("5"):
+            return "SH"         # 沪市股票 / 沪市ETF（51xxxx）
+        elif code.startswith("0") or code.startswith("3") or code.startswith("15"):
+            return "SZ"         # 深市股票 / 深市ETF（159xxx）
         elif code.startswith("8") or code.startswith("4"):
             return "BJ"
         return "SZ"
+
+    @staticmethod
+    def _is_etf(code: str) -> bool:
+        """判断是否为ETF基金代码（沪市51xxxx / 深市159xxx）"""
+        return code.startswith("51") or code.startswith("159")
 
     def get_stock_list(self) -> pd.DataFrame:
         """获取A股股票列表
@@ -118,35 +123,61 @@ class AKShareSource(BaseDataSource):
     def get_daily_bars(
         self, code: str, start_date: date, end_date: date
     ) -> pd.DataFrame:
-        """获取股票日K线数据（新浪源，避免东财限流）"""
-        logger.debug(f"AKShare: 获取日K线 {code} [{start_date} ~ {end_date}]")
+        """获取日K线数据（新浪源）。ETF 走 fund_etf_hist_sina，个股走 stock_zh_a_daily"""
+        if self._is_etf(code):
+            return self._get_etf_daily_bars(code, start_date, end_date)
+        return self._get_stock_daily_bars(code, start_date, end_date)
 
+    def _get_stock_daily_bars(
+        self, code: str, start_date: date, end_date: date
+    ) -> pd.DataFrame:
+        """个股日K线（新浪源）"""
+        logger.debug(f"AKShare: 获取个股日K线 {code} [{start_date} ~ {end_date}]")
         symbol = self._code_to_sina_symbol(code)
-
         df = self._request_with_retry(
             ak.stock_zh_a_daily,
             symbol=symbol,
             start_date=start_date.strftime("%Y%m%d"),
             end_date=end_date.strftime("%Y%m%d"),
-            adjust="",  # 不复权
+            adjust="",
         )
         if df.empty:
             return df
+        return self._normalize_bar_df(df, start_date, end_date)
 
+    def _get_etf_daily_bars(
+        self, code: str, start_date: date, end_date: date
+    ) -> pd.DataFrame:
+        """ETF 日K线（新浪源：fund_etf_hist_sina，不支持日期参数，获取全量后过滤）"""
+        logger.debug(f"AKShare: 获取ETF日K线 {code} [{start_date} ~ {end_date}]")
+        symbol = self._code_to_sina_symbol(code)
+        df = self._request_with_retry(ak.fund_etf_hist_sina, symbol=symbol)
+        if df.empty:
+            return df
+        return self._normalize_bar_df(df, start_date, end_date)
+
+    def _normalize_bar_df(
+        self, df: pd.DataFrame, start_date: date, end_date: date
+    ) -> pd.DataFrame:
+        """将 AKShare 返回的 DataFrame 标准化为统一格式并按日期过滤"""
         result = pd.DataFrame()
         result["trade_date"] = pd.to_datetime(df["date"]).dt.date
         result["open"] = df["open"].astype(float)
         result["high"] = df["high"].astype(float)
         result["low"] = df["low"].astype(float)
         result["close"] = df["close"].astype(float)
-        # 新浪源无昨收字段，用前一天收盘价
+        # 新浪源无昨收字段，用前一日收盘价代替
         result["pre_close"] = result["close"].shift(1)
         result["volume"] = df["volume"].astype(int)
         result["amount"] = df["amount"].astype(float) if "amount" in df.columns else 0.0
         result["turnover"] = df["turnover"].astype(float) if "turnover" in df.columns else 0.0
-        # 计算涨跌幅
         result["pct_change"] = result["close"].pct_change() * 100
         result["amplitude"] = 0.0
+
+        # 按日期范围过滤
+        result = result[
+            (result["trade_date"] >= start_date) & (result["trade_date"] <= end_date)
+        ].reset_index(drop=True)
 
         return result
 
@@ -155,11 +186,16 @@ class AKShareSource(BaseDataSource):
     ) -> pd.DataFrame:
         """
         获取复权因子（新浪源）
-        通过对比前复权和不复权数据计算
+        通过对比前复权和不复权数据计算。ETF 使用 fund_etf_hist_sina（全量后过滤）。
         """
         logger.debug(f"AKShare: 获取复权因子 {code}")
 
         symbol = self._code_to_sina_symbol(code)
+
+        if self._is_etf(code):
+            # ETF：fund_etf_hist_sina 不支持 adjust 参数，直接返回空（不做复权）
+            logger.debug(f"ETF {code} 暂不支持复权因子计算，跳过")
+            return pd.DataFrame()
 
         # 获取前复权数据
         df_qfq = self._request_with_retry(

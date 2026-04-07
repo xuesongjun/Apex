@@ -23,79 +23,86 @@ class MACrossStrategy(BaseStrategy):
         self.short_period = self.config.get("short_period", 5)
         self.long_period = self.config.get("long_period", 20)
         self.ma_type = self.config.get("ma_type", "EMA")
+        # EMA 增量缓存：{code: {"short": float, "long": float}}
+        # 存储上一根 K 线处理完后的 EMA 值，下一根 K 线用作 prev
+        self._ema_cache: dict[str, dict[str, float]] = {}
 
     @property
     def name(self) -> str:
         return f"MA交叉({self.short_period}/{self.long_period} {self.ma_type})"
 
     def on_bar(self, bar: BarData) -> Optional[Signal]:
-        """
-        每根K线触发：
-        1. 计算短期和长期均线
-        2. 判断金叉/死叉
-        3. 产生买入/卖出信号
-        """
         closes = self.get_close_series(bar.code)
-
-        # 需要足够的历史数据才能计算均线
         if len(closes) < self.long_period + 1:
             return None
 
-        # 计算当前和前一根的均线值
-        short_ma_curr = self._calc_ma(closes, self.short_period)
-        short_ma_prev = self._calc_ma(closes[:-1], self.short_period)
-        long_ma_curr = self._calc_ma(closes, self.long_period)
-        long_ma_prev = self._calc_ma(closes[:-1], self.long_period)
+        code = bar.code
+
+        if self.ma_type == "SMA":
+            # SMA：直接窗口切片，O(period)，无需缓存
+            short_ma_prev = sum(closes[-self.short_period - 1:-1]) / self.short_period
+            short_ma_curr = sum(closes[-self.short_period:]) / self.short_period
+            long_ma_prev = sum(closes[-self.long_period - 1:-1]) / self.long_period
+            long_ma_curr = sum(closes[-self.long_period:]) / self.long_period
+        else:
+            # EMA：增量计算，每根 K 线 O(1)
+            sm = 2 / (self.short_period + 1)
+            lm = 2 / (self.long_period + 1)
+
+            if code not in self._ema_cache:
+                # 首次到达足够数据：从头算一次 closes[:-1] 作为 prev（只发生一次）
+                prev_closes = closes[:-1]
+                short_prev = self._calc_ema_full(prev_closes, self.short_period)
+                long_prev = self._calc_ema_full(prev_closes, self.long_period)
+            else:
+                cache = self._ema_cache[code]
+                short_prev = cache["short"]
+                long_prev = cache["long"]
+
+            short_curr = (closes[-1] - short_prev) * sm + short_prev
+            long_curr = (closes[-1] - long_prev) * lm + long_prev
+
+            # 更新缓存（存当前值，下次作为 prev）
+            self._ema_cache[code] = {"short": short_curr, "long": long_curr}
+
+            short_ma_prev, short_ma_curr = short_prev, short_curr
+            long_ma_prev, long_ma_curr = long_prev, long_curr
 
         # 金叉：短期均线从下方上穿长期均线
         if short_ma_prev <= long_ma_prev and short_ma_curr > long_ma_curr:
-            if not self.has_position(bar.code):
+            if not self.has_position(code):
                 return Signal(
-                    code=bar.code,
+                    code=code,
                     direction=Direction.BUY,
                     trade_date=bar.trade_date,
-                    price=0,  # 以下一根K线开盘价成交
-                    volume=0,  # 由引擎自动计算
+                    price=0,
+                    volume=0,
                     reason=f"金叉: MA{self.short_period}={short_ma_curr:.2f} 上穿 MA{self.long_period}={long_ma_curr:.2f}",
                     confidence=0.8,
                 )
 
         # 死叉：短期均线从上方下穿长期均线
         if short_ma_prev >= long_ma_prev and short_ma_curr < long_ma_curr:
-            if self.has_position(bar.code):
+            if self.has_position(code):
                 return Signal(
-                    code=bar.code,
+                    code=code,
                     direction=Direction.SELL,
                     trade_date=bar.trade_date,
                     price=0,
-                    volume=0,  # 全部卖出
+                    volume=0,
                     reason=f"死叉: MA{self.short_period}={short_ma_curr:.2f} 下穿 MA{self.long_period}={long_ma_curr:.2f}",
                     confidence=0.8,
                 )
 
         return None
 
-    def _calc_ma(self, prices: list[float], period: int) -> float:
-        """计算均线值"""
+    @staticmethod
+    def _calc_ema_full(prices: list[float], period: int) -> float:
+        """从头计算 EMA，仅在首次初始化时调用一次"""
         if len(prices) < period:
             return 0.0
-
-        if self.ma_type == "SMA":
-            return sum(prices[-period:]) / period
-        elif self.ma_type == "EMA":
-            return self._calc_ema(prices, period)
-        return 0.0
-
-    def _calc_ema(self, prices: list[float], period: int) -> float:
-        """计算指数移动平均"""
-        if len(prices) < period:
-            return 0.0
-
-        multiplier = 2 / (period + 1)
-        # 用前 period 个值的 SMA 作为 EMA 初始值
         ema = sum(prices[:period]) / period
-
+        mul = 2 / (period + 1)
         for price in prices[period:]:
-            ema = (price - ema) * multiplier + ema
-
+            ema = (price - ema) * mul + ema
         return ema

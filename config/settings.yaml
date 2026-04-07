@@ -44,11 +44,12 @@ trading_rules:
 
   # 涨跌停规则
   price_limit:
-    main_board: 0.10       # 主板 ±10%
-    gem: 0.20              # 创业板 ±20% (Growth Enterprise Market)
-    star: 0.20             # 科创板 ±20% (STAR Market)
-    bse: 0.30              # 北交所 ±30%
-    st: 0.05               # ST 股票 ±5%
+    main_board: 0.10          # 主板 ±10%
+    gem: 0.20                 # 创业板 ±20%
+    star: 0.20                # 科创板 ±20%
+    bse: 0.30                 # 北交所 ±30%
+    st: 0.05                  # ST 股票 ±5%
+    cross_border_etf: 0.15    # 跨境ETF（港股/美股/日韩等）±15%
 
 # 风控参数
 risk_control:

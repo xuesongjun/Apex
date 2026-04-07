@@ -31,7 +31,30 @@ class TradingRules:
             return limits.get("gem", 0.20)     # 创业板
         if code.startswith("8") or code.startswith("4"):
             return limits.get("bse", 0.30)     # 北交所
-        return limits.get("main_board", 0.10)  # 主板
+        # 跨境 ETF（追踪境外市场，沪市513xxx / 深市159920起部分）：±15%
+        if TradingRules.is_cross_border_etf(code):
+            return limits.get("cross_border_etf", 0.15)
+        return limits.get("main_board", 0.10)  # 主板 / 普通ETF
+
+    @staticmethod
+    def is_cross_border_etf(code: str) -> bool:
+        """
+        判断是否为跨境 ETF（追踪境外指数，A股涨跌停幅度为 ±15%）
+
+        沪市 513xxx 系列基本全是跨境 ETF（港股/美股/日韩等）。
+        深市跨境 ETF 常见于 159920、159941、159632 等，此处列举主要品种。
+        """
+        if code.startswith("513"):
+            return True
+        _CROSS_BORDER_SZ = {
+            "159920",  # 恒生ETF
+            "159941",  # 纳指ETF
+            "159632",  # 纳斯达克100
+            "159605",  # 亚太精选ETF
+            "159866",  # 恒生科技指数ETF
+            "159937",  # 黄金ETF（SPDR）
+        }
+        return code in _CROSS_BORDER_SZ
 
     @staticmethod
     def calc_limit_prices(

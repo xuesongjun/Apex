@@ -28,47 +28,48 @@ class StockRepository:
 
     def upsert_stock_list(self, df: pd.DataFrame) -> int:
         """
-        更新或插入股票列表
+        更新或插入股票列表（批量 upsert）
         返回影响的行数
         """
         if df.empty:
             return 0
 
+        records = [
+            {
+                "code": row["code"],
+                "name": row.get("name", ""),
+                "market": row.get("market", ""),
+                "board": row.get("board", "main"),
+                "industry": row.get("industry", ""),
+                "list_date": row.get("list_date"),
+                "is_st": bool(row.get("is_st", False)),
+            }
+            for _, row in df.iterrows()
+        ]
+
         session = get_session()
-        count = 0
         try:
-            for _, row in df.iterrows():
-                existing = session.query(StockBasic).filter_by(
-                    code=row["code"]
-                ).first()
-                if existing:
-                    existing.name = row.get("name", existing.name)
-                    existing.market = row.get("market", existing.market)
-                    existing.board = row.get("board", existing.board)
-                    existing.industry = row.get("industry", existing.industry)
-                    if row.get("is_st") is not None:
-                        existing.is_st = bool(row["is_st"])
-                else:
-                    stock = StockBasic(
-                        code=row["code"],
-                        name=row.get("name", ""),
-                        market=row.get("market", ""),
-                        board=row.get("board", "main"),
-                        industry=row.get("industry", ""),
-                        list_date=row.get("list_date"),
-                        is_st=bool(row.get("is_st", False)),
-                    )
-                    session.add(stock)
-                count += 1
+            stmt = sqlite_insert(StockBasic).values(records)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["code"],
+                set_={
+                    "name": stmt.excluded.name,
+                    "market": stmt.excluded.market,
+                    "board": stmt.excluded.board,
+                    "industry": stmt.excluded.industry,
+                    "is_st": stmt.excluded.is_st,
+                },
+            )
+            session.execute(stmt)
             session.commit()
-            logger.info(f"股票列表更新完成，处理 {count} 条记录")
+            logger.info(f"股票列表更新完成，处理 {len(records)} 条记录")
         except Exception as e:
             session.rollback()
             logger.error(f"股票列表更新失败: {e}")
             raise
         finally:
             session.close()
-        return count
+        return len(records)
 
     def get_all_stock_codes(self, exclude_st: bool = True) -> list[str]:
         """获取所有股票代码"""
@@ -92,44 +93,40 @@ class StockRepository:
     # ========== 日K线数据 ==========
 
     def save_daily_bars(self, code: str, df: pd.DataFrame) -> int:
-        """保存日K线数据（去重插入）"""
+        """保存日K线数据（批量去重插入）"""
         if df.empty:
             return 0
 
-        session = get_session()
-        count = 0
-        try:
-            for _, row in df.iterrows():
-                existing = session.query(StockDaily).filter_by(
-                    code=code, trade_date=row["trade_date"]
-                ).first()
-                if existing:
-                    continue  # 已存在则跳过
+        records = [
+            {
+                "code": code,
+                "trade_date": row["trade_date"],
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "close": row.get("close"),
+                "pre_close": row.get("pre_close"),
+                "volume": row.get("volume"),
+                "amount": row.get("amount"),
+                "turnover": row.get("turnover"),
+                "pct_change": row.get("pct_change"),
+                "amplitude": row.get("amplitude"),
+            }
+            for _, row in df.iterrows()
+        ]
 
-                bar = StockDaily(
-                    code=code,
-                    trade_date=row["trade_date"],
-                    open=row.get("open"),
-                    high=row.get("high"),
-                    low=row.get("low"),
-                    close=row.get("close"),
-                    pre_close=row.get("pre_close"),
-                    volume=row.get("volume"),
-                    amount=row.get("amount"),
-                    turnover=row.get("turnover"),
-                    pct_change=row.get("pct_change"),
-                    amplitude=row.get("amplitude"),
-                )
-                session.add(bar)
-                count += 1
+        session = get_session()
+        try:
+            stmt = sqlite_insert(StockDaily).values(records).on_conflict_do_nothing()
+            result = session.execute(stmt)
             session.commit()
+            return result.rowcount
         except Exception as e:
             session.rollback()
             logger.error(f"保存日K线失败 {code}: {e}")
             raise
         finally:
             session.close()
-        return count
 
     def get_daily_bars(
         self,
@@ -234,65 +231,57 @@ class StockRepository:
     # ========== 复权因子 ==========
 
     def save_adj_factors(self, code: str, df: pd.DataFrame) -> int:
-        """保存复权因子"""
+        """保存复权因子（批量 upsert，更新已有记录）"""
         if df.empty:
             return 0
 
+        records = [
+            {"code": code, "trade_date": row["trade_date"], "adj_factor": row["adj_factor"]}
+            for _, row in df.iterrows()
+        ]
+
         session = get_session()
-        count = 0
         try:
-            for _, row in df.iterrows():
-                existing = session.query(AdjFactor).filter_by(
-                    code=code, trade_date=row["trade_date"]
-                ).first()
-                if existing:
-                    existing.adj_factor = row["adj_factor"]
-                else:
-                    session.add(AdjFactor(
-                        code=code,
-                        trade_date=row["trade_date"],
-                        adj_factor=row["adj_factor"],
-                    ))
-                    count += 1
+            stmt = sqlite_insert(AdjFactor).values(records)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["code", "trade_date"],
+                set_={"adj_factor": stmt.excluded.adj_factor},
+            )
+            result = session.execute(stmt)
             session.commit()
+            return result.rowcount
         except Exception as e:
             session.rollback()
             logger.error(f"保存复权因子失败 {code}: {e}")
             raise
         finally:
             session.close()
-        return count
 
     # ========== 交易日历 ==========
 
     def save_trade_calendar(self, df: pd.DataFrame, exchange: str = "SSE") -> int:
-        """保存交易日历"""
+        """保存交易日历（批量去重插入）"""
         if df.empty:
             return 0
 
+        records = [
+            {"exchange": exchange, "cal_date": row["cal_date"], "is_open": row["is_open"]}
+            for _, row in df.iterrows()
+        ]
+
         session = get_session()
-        count = 0
         try:
-            for _, row in df.iterrows():
-                existing = session.query(TradeCalendar).filter_by(
-                    exchange=exchange, cal_date=row["cal_date"]
-                ).first()
-                if not existing:
-                    session.add(TradeCalendar(
-                        exchange=exchange,
-                        cal_date=row["cal_date"],
-                        is_open=row["is_open"],
-                    ))
-                    count += 1
+            stmt = sqlite_insert(TradeCalendar).values(records).on_conflict_do_nothing()
+            result = session.execute(stmt)
             session.commit()
-            logger.info(f"交易日历更新完成，新增 {count} 条记录")
+            logger.info(f"交易日历更新完成，新增 {result.rowcount} 条记录")
+            return result.rowcount
         except Exception as e:
             session.rollback()
             logger.error(f"保存交易日历失败: {e}")
             raise
         finally:
             session.close()
-        return count
 
     def get_trade_dates(
         self, start_date: date, end_date: date
@@ -328,36 +317,35 @@ class StockRepository:
     # ========== 指数日K线 ==========
 
     def save_index_daily(self, code: str, name: str, df: pd.DataFrame) -> int:
-        """保存指数日K线"""
+        """保存指数日K线（批量去重插入）"""
         if df.empty:
             return 0
 
+        records = [
+            {
+                "code": code,
+                "name": name,
+                "trade_date": row["trade_date"],
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "close": row.get("close"),
+                "volume": row.get("volume"),
+                "amount": row.get("amount"),
+                "pct_change": row.get("pct_change"),
+            }
+            for _, row in df.iterrows()
+        ]
+
         session = get_session()
-        count = 0
         try:
-            for _, row in df.iterrows():
-                existing = session.query(IndexDaily).filter_by(
-                    code=code, trade_date=row["trade_date"]
-                ).first()
-                if not existing:
-                    session.add(IndexDaily(
-                        code=code,
-                        name=name,
-                        trade_date=row["trade_date"],
-                        open=row.get("open"),
-                        high=row.get("high"),
-                        low=row.get("low"),
-                        close=row.get("close"),
-                        volume=row.get("volume"),
-                        amount=row.get("amount"),
-                        pct_change=row.get("pct_change"),
-                    ))
-                    count += 1
+            stmt = sqlite_insert(IndexDaily).values(records).on_conflict_do_nothing()
+            result = session.execute(stmt)
             session.commit()
+            return result.rowcount
         except Exception as e:
             session.rollback()
             logger.error(f"保存指数日K线失败 {code}: {e}")
             raise
         finally:
             session.close()
-        return count

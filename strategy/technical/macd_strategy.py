@@ -24,8 +24,8 @@ class MACDStrategy(BaseStrategy):
         self.fast_period = self.config.get("fast_period", 12)
         self.slow_period = self.config.get("slow_period", 26)
         self.signal_period = self.config.get("signal_period", 9)
-        # 缓存每只股票的 MACD 历史值
-        self._macd_history: dict[str, list[dict]] = {}
+        # MACD 增量缓存：{code: {"fast_ema", "slow_ema", "dif", "dea", "hist"}}
+        self._macd_cache: dict[str, dict[str, float]] = {}
 
     @property
     def name(self) -> str:
@@ -37,21 +37,54 @@ class MACDStrategy(BaseStrategy):
         if len(closes) < min_len:
             return None
 
-        # 计算 MACD
-        dif, dea, macd_hist = self._calc_macd(closes)
-        if len(macd_hist) < 2:
-            return None
+        code = bar.code
+        fast_mul = 2 / (self.fast_period + 1)
+        slow_mul = 2 / (self.slow_period + 1)
+        signal_mul = 2 / (self.signal_period + 1)
 
-        curr_hist = macd_hist[-1]
-        prev_hist = macd_hist[-2]
-        curr_dif = dif[-1]
+        if code not in self._macd_cache:
+            # 首次：用 closes[:-1] 从头初始化所有状态（只做一次）
+            prev_closes = closes[:-1]
+            fast_emas = _ema_series_full(prev_closes, self.fast_period)
+            slow_emas = _ema_series_full(prev_closes, self.slow_period)
+
+            min_l = min(len(fast_emas), len(slow_emas))
+            dif_series = [f - s for f, s in zip(fast_emas[-min_l:], slow_emas[-min_l:])]
+            dea_series = _ema_series_full(dif_series, self.signal_period)
+
+            prev_fast = fast_emas[-1]
+            prev_slow = slow_emas[-1]
+            prev_dea = dea_series[-1]
+            prev_dif = dif_series[-1]
+            prev_hist = (prev_dif - prev_dea) * 2
+        else:
+            cache = self._macd_cache[code]
+            prev_fast = cache["fast_ema"]
+            prev_slow = cache["slow_ema"]
+            prev_dea = cache["dea"]
+            prev_hist = cache["hist"]
+
+        # 当前 K 线增量更新，O(1)
+        curr_fast = (closes[-1] - prev_fast) * fast_mul + prev_fast
+        curr_slow = (closes[-1] - prev_slow) * slow_mul + prev_slow
+        curr_dif = curr_fast - curr_slow
+        curr_dea = (curr_dif - prev_dea) * signal_mul + prev_dea
+        curr_hist = (curr_dif - curr_dea) * 2
+
+        self._macd_cache[code] = {
+            "fast_ema": curr_fast,
+            "slow_ema": curr_slow,
+            "dif": curr_dif,
+            "dea": curr_dea,
+            "hist": curr_hist,
+        }
 
         # 金叉：MACD柱从负转正
         if prev_hist <= 0 and curr_hist > 0:
-            if not self.has_position(bar.code):
+            if not self.has_position(code):
                 strength = "强" if curr_dif > 0 else "弱"
                 return Signal(
-                    code=bar.code,
+                    code=code,
                     direction=Direction.BUY,
                     trade_date=bar.trade_date,
                     reason=f"MACD金叉({strength}): DIF={curr_dif:.3f}, HIST={curr_hist:.3f}",
@@ -60,9 +93,9 @@ class MACDStrategy(BaseStrategy):
 
         # 死叉：MACD柱从正转负
         if prev_hist >= 0 and curr_hist < 0:
-            if self.has_position(bar.code):
+            if self.has_position(code):
                 return Signal(
-                    code=bar.code,
+                    code=code,
                     direction=Direction.SELL,
                     trade_date=bar.trade_date,
                     reason=f"MACD死叉: DIF={curr_dif:.3f}, HIST={curr_hist:.3f}",
@@ -71,47 +104,15 @@ class MACDStrategy(BaseStrategy):
 
         return None
 
-    def _calc_macd(
-        self, prices: list[float]
-    ) -> tuple[list[float], list[float], list[float]]:
-        """
-        计算 MACD 三要素
 
-        返回:
-            (DIF列表, DEA列表, MACD柱列表)
-        """
-        # 快线 EMA
-        fast_ema = self._ema_series(prices, self.fast_period)
-        # 慢线 EMA
-        slow_ema = self._ema_series(prices, self.slow_period)
-
-        # DIF = 快线 - 慢线
-        min_len = min(len(fast_ema), len(slow_ema))
-        fast_tail = fast_ema[-min_len:]
-        slow_tail = slow_ema[-min_len:]
-        dif = [f - s for f, s in zip(fast_tail, slow_tail)]
-
-        # DEA = DIF 的 EMA
-        dea = self._ema_series(dif, self.signal_period)
-
-        # MACD 柱 = (DIF - DEA) * 2
-        dif_tail = dif[-len(dea):]
-        macd_hist = [(d - e) * 2 for d, e in zip(dif_tail, dea)]
-
-        return dif_tail, dea, macd_hist
-
-    @staticmethod
-    def _ema_series(values: list[float], period: int) -> list[float]:
-        """计算 EMA 序列"""
-        if len(values) < period:
-            return []
-
-        multiplier = 2 / (period + 1)
-        ema_val = sum(values[:period]) / period
-        result = [ema_val]
-
-        for val in values[period:]:
-            ema_val = (val - ema_val) * multiplier + ema_val
-            result.append(ema_val)
-
-        return result
+def _ema_series_full(values: list[float], period: int) -> list[float]:
+    """从头计算完整 EMA 序列，仅在初始化时调用一次"""
+    if len(values) < period:
+        return []
+    multiplier = 2 / (period + 1)
+    ema_val = sum(values[:period]) / period
+    result = [ema_val]
+    for val in values[period:]:
+        ema_val = (val - ema_val) * multiplier + ema_val
+        result.append(ema_val)
+    return result
