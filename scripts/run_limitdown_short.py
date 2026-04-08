@@ -172,6 +172,8 @@ def run_backtest(
             "volume": volume,
             "sell_amount": round(sell_price * volume, 2),
             "buy_amount": round(buy_price * volume, 2),
+            "sell_commission": round(sell_fees.commission, 2),
+            "buy_commission": round(buy_fees.commission, 2),
             "commission": round(sell_fees.commission + buy_fees.commission, 2),
             "stamp_tax": round(sell_fees.stamp_tax + buy_fees.stamp_tax, 2),
             "transfer_fee": round(sell_fees.transfer_fee + buy_fees.transfer_fee, 2),
@@ -280,11 +282,13 @@ def _export_csv(tdf: pd.DataFrame, path: str):
     """导出每日交易明细到 CSV"""
     out = tdf[["date", "sell_price", "buy_price", "spread_pct", "volume",
                "sell_amount", "buy_amount",
-               "commission", "stamp_tax", "transfer_fee", "total_fees",
+               "sell_commission", "buy_commission", "commission",
+               "stamp_tax", "transfer_fee", "total_fees",
                "raw_pnl", "pnl", "capital_before", "capital"]].copy()
     out.columns = ["日期", "开盘价(卖出)", "收盘价(买入)", "价差%", "份数",
                    "卖出金额", "买入金额",
-                   "佣金", "印花税", "过户费", "合计手续费",
+                   "卖出佣金", "买入佣金", "佣金合计",
+                   "印花税", "过户费", "合计手续费",
                    "毛盈亏", "净盈亏", "买前余额", "买后余额"]
     out.to_csv(path, index=False, encoding="utf-8-sig")
     print(f"\n[已导出] 全部 {len(out)} 笔交易明细 → {path}")
@@ -369,11 +373,11 @@ def _print_report(r: dict, show_all: bool = False):
         fee_indent = sum(C[:5]) + len(SEP) * 5
         fee_line = (
             f"{'':>{fee_indent}}"
-            f"买入金额 {row['buy_amount']:,.2f}"
-            f"  佣金 {row['commission']:.2f}"
+            f"卖出金额 {row['sell_amount']:,.2f}  买入金额 {row['buy_amount']:,.2f}"
+            f"  佣金(卖{row['sell_commission']:.2f}+买{row['buy_commission']:.2f}={row['commission']:.2f})"
             + (f"  印花税 {row['stamp_tax']:.2f}" if row['stamp_tax'] > 0 else "")
             + (f"  过户费 {row['transfer_fee']:.2f}" if row['transfer_fee'] > 0 else "")
-            + f"  合计手续费 {row['total_fees']:.2f}"
+            + f"  手续费合计 {row['total_fees']:.2f}"
         )
         print(f"  {main_line}")
         print(f"  {fee_line}")
