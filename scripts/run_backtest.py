@@ -175,7 +175,7 @@ def main():
             ans = input(f"  继续使用现有数据（从 {db_start} 开始）回测？[Y/n]: ").strip().lower()
             if ans == "n":
                 abort = True
-        if db_end < end_date:
+        if (end_date - db_end).days > 3:
             print(f"\n[警告] {code} 数据库最新为 {db_end}，早于请求的结束日期 {end_date}")
             print(f"  若需要最新数据，请先运行：python scripts/daily_update.py --codes {code}")
             ans = input(f"  继续使用现有数据（至 {db_end} 为止）回测？[Y/n]: ").strip().lower()

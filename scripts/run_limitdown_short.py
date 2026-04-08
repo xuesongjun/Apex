@@ -98,7 +98,7 @@ def run_backtest(
         ans = input("  继续使用现有数据（从 {} 开始）回测？[Y/n]: ".format(db_start)).strip().lower()
         if ans == "n":
             return {}
-    if db_end < end_date:
+    if (end_date - db_end).days > 3:
         print(f"\n[警告] 数据库中 {code} 最新数据为 {db_end}，早于请求的结束日期 {end_date}")
         print(f"  若需要最新数据，请先运行：python scripts/daily_update.py --codes {code}")
         ans = input("  继续使用现有数据（至 {} 为止）回测？[Y/n]: ".format(db_end)).strip().lower()
@@ -123,6 +123,12 @@ def run_backtest(
     if df.empty:
         logger.error("清洗后无有效数据")
         return {}
+
+    actual_start = df["trade_date"].iloc[0]
+    actual_end   = df["trade_date"].iloc[-1]
+    if actual_start != start_date:
+        print(f"[提示] 实际回测区间：{actual_start} ~ {actual_end}"
+              f"（首日因无昨收价已自动跳过）")
 
     capital = initial_capital
     trades = []
