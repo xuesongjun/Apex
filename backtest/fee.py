@@ -57,8 +57,10 @@ class FeeModel:
         if direction == Direction.SELL and not is_etf:
             stamp_tax = amount * self.stamp_tax_rate
 
-        # 过户费（买卖都收）
-        transfer_fee = amount * self.transfer_fee_rate
+        # 过户费（仅个股收取，ETF 免征）
+        transfer_fee = 0.0
+        if not is_etf:
+            transfer_fee = amount * self.transfer_fee_rate
 
         total = commission + stamp_tax + transfer_fee
 
