@@ -256,13 +256,25 @@ data_sources:
 
 ### 交易费用
 
+编辑 `config/settings.yaml` 中的 `trading_rules` 节：
+
 ```yaml
 trading_rules:
-  commission_rate: 0.00025    # 佣金（万2.5）
-  min_commission: 5.0         # 最低佣金（元）
-  stamp_tax_rate: 0.001       # 印花税（千1，仅卖出）
+  commission_rate: 0.0001     # 佣金费率，万0.1 = 0.0001，万2.5 = 0.00025
+  min_commission: 0.0         # 最低佣金（元），0 = 免五，5.0 = 最低5元
+  stamp_tax_rate: 0.001       # 印花税（千1，仅个股卖出，ETF 自动免征）
   transfer_fee_rate: 0.00002  # 过户费（万0.2）
 ```
+
+常见券商费率对照：
+
+| 券商类型 | commission_rate | min_commission |
+|---------|----------------|----------------|
+| 万0.1 免五（主流互联网券商） | `0.0001` | `0.0` |
+| 万1.5 最低5元（传统券商） | `0.00015` | `5.0` |
+| 万2.5 最低5元（默认保守值） | `0.00025` | `5.0` |
+
+> ETF 交易自动免除印花税，无需额外配置。
 
 ### 策略参数
 
