@@ -105,7 +105,7 @@ def print_dataframe(df: pd.DataFrame, title: str):
         return
 
     # 列定义: (表头, 宽度)
-    cols = [("日期", 12), ("开盘", 8), ("最高", 8), ("最低", 8), ("收盘", 8), ("成交量", 12), ("换手率", 8), ("涨跌幅", 8)]
+    cols = [("日期", 12), ("开盘", 9), ("最高", 9), ("最低", 9), ("收盘", 9), ("成交量", 12), ("换手率", 8), ("涨跌幅", 8)]
 
     sep = "+" + "+".join("-" * w for _, w in cols) + "+"
     header = "|" + "|".join(pad_str(name, w, "^") for name, w in cols) + "|"
@@ -117,10 +117,10 @@ def print_dataframe(df: pd.DataFrame, title: str):
 
     for _, row in df.iterrows():
         d = str(row.get("trade_date", ""))
-        o = f"{row.get('open', 0):.2f}"
-        h = f"{row.get('high', 0):.2f}"
-        l = f"{row.get('low', 0):.2f}"
-        c = f"{row.get('close', 0):.2f}"
+        o = f"{row.get('open', 0):.3f}"
+        h = f"{row.get('high', 0):.3f}"
+        l = f"{row.get('low', 0):.3f}"
+        c = f"{row.get('close', 0):.3f}"
         v = format_volume(row.get("volume", 0))
         t = format_turnover(row.get("turnover", 0))
         p = f"{row.get('pct_change', 0):+.2f}" if pd.notna(row.get("pct_change")) else "-"
@@ -173,8 +173,8 @@ def print_comparison(db_df: pd.DataFrame, api_df: pd.DataFrame):
         db_close = row.get("close_db")
         api_close = row.get("close_api")
 
-        db_str = f"{db_close:.2f}" if pd.notna(db_close) else "缺失"
-        api_str = f"{api_close:.2f}" if pd.notna(api_close) else "缺失"
+        db_str = f"{db_close:.3f}" if pd.notna(db_close) else "缺失"
+        api_str = f"{api_close:.3f}" if pd.notna(api_close) else "缺失"
 
         if pd.notna(db_close) and pd.notna(api_close):
             diff = abs(db_close - api_close)

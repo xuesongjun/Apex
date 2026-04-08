@@ -326,7 +326,7 @@ def _print_report(r: dict, show_all: bool = False):
 
     # 明细表（列宽均为终端显示宽度）
     # 列：日期12  开盘8  收盘8  价差%9  手数10  盈亏12  累计资金14
-    C = [12, 8, 8, 9, 10, 12, 14]
+    C = [12, 9, 9, 9, 10, 12, 14]
     SEP = "  "
     tdf: pd.DataFrame = r["trades_df"]
     display_rows = tdf if show_all else tdf.tail(10)
@@ -347,8 +347,8 @@ def _print_report(r: dict, show_all: bool = False):
     for _, row in display_rows.iterrows():
         line = SEP.join([
             _ljust(str(row['date']),                   C[0]),
-            _rjust(f"{row['sell_price']:.2f}",         C[1]),
-            _rjust(f"{row['buy_price']:.2f}",          C[2]),
+            _rjust(f"{row['sell_price']:.3f}",         C[1]),
+            _rjust(f"{row['buy_price']:.3f}",          C[2]),
             _rjust(f"{row['spread_pct']:+.2f}%",       C[3]),
             _rjust(f"{row['volume']:,}",               C[4]),
             _rjust(f"{row['pnl']:+,.2f}",              C[5]),

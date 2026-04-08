@@ -223,8 +223,8 @@ def _print_trades(df, total_count: int):
 
     # 列定义: (表头, 宽度)
     cols = [
-        ("代码", 8), ("买入日", 12), ("卖出日", 12), ("买入价", 8),
-        ("卖出价", 8), ("数量(股)", 10), ("盈亏", 12),
+        ("代码", 8), ("买入日", 12), ("卖出日", 12), ("买入价", 9),
+        ("卖出价", 9), ("数量(股)", 10), ("盈亏", 12),
         ("收益率%", 8), ("持仓天数", 8), ("卖出原因", 38),
     ]
 
@@ -240,8 +240,8 @@ def _print_trades(df, total_count: int):
             row.get("code", ""),
             str(row.get("buy_date", "")),
             str(row.get("sell_date", "")),
-            f"{row.get('buy_price', 0):.2f}",
-            f"{row.get('sell_price', 0):.2f}",
+            f"{row.get('buy_price', 0):.3f}",
+            f"{row.get('sell_price', 0):.3f}",
             f"{row.get('volume', 0):,d}",
             f"{row.get('profit', 0):+,.2f}",
             f"{row.get('profit_pct', 0):+.2f}",
