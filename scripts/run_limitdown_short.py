@@ -166,9 +166,13 @@ def run_backtest(
             "date": trade_date,
             "sell_price": sell_price,
             "buy_price": buy_price,
-            "spread": round(sell_price - buy_price, 2),
             "spread_pct": round(pnl_pct, 2),
             "volume": volume,
+            "sell_amount": round(sell_price * volume, 2),
+            "buy_amount": round(buy_price * volume, 2),
+            "commission": round(sell_fees.commission + buy_fees.commission, 2),
+            "stamp_tax": round(sell_fees.stamp_tax + buy_fees.stamp_tax, 2),
+            "transfer_fee": round(sell_fees.transfer_fee + buy_fees.transfer_fee, 2),
             "total_fees": round(total_fees, 2),
             "raw_pnl": round(raw_pnl, 2),
             "pnl": round(pnl, 2),
@@ -272,9 +276,13 @@ def _build_result(
 def _export_csv(tdf: pd.DataFrame, path: str):
     """导出每日交易明细到 CSV"""
     out = tdf[["date", "sell_price", "buy_price", "spread_pct", "volume",
-               "total_fees", "raw_pnl", "pnl", "capital"]].copy()
-    out.columns = ["日期", "开盘价(卖出)", "收盘价(买入)", "价差%",
-                   "手数", "手续费", "毛盈亏", "净盈亏", "累计资金"]
+               "sell_amount", "buy_amount",
+               "commission", "stamp_tax", "transfer_fee", "total_fees",
+               "raw_pnl", "pnl", "capital"]].copy()
+    out.columns = ["日期", "开盘价(卖出)", "收盘价(买入)", "价差%", "份数",
+                   "卖出金额", "买入金额",
+                   "佣金", "印花税", "过户费", "合计手续费",
+                   "毛盈亏", "净盈亏", "累计资金"]
     out.to_csv(path, index=False, encoding="utf-8-sig")
     print(f"\n[已导出] 全部 {len(out)} 笔交易明细 → {path}")
 
@@ -323,37 +331,50 @@ def _print_report(r: dict, show_all: bool = False):
     kv("当日上涨天数",  f"{r['open_lt_close_days']:>{VW}d}  （开 ≤ 收，空头亏损）")
     kv("平均开收价差",  f"{r['avg_spread']:>+{VW}.4f} 元")
 
-    # 明细表（列宽均为终端显示宽度）
-    # 列：日期12  开盘8  收盘8  价差%9  手数10  盈亏12  累计资金14
-    C = [12, 9, 9, 9, 10, 12, 14]
+    # 明细表
+    # 主行列宽：日期12  开盘价9  收盘价9  价差%9  份数10  买入金额12  净盈亏12  累计资金14
+    C = [12, 9, 9, 9, 10, 12, 12, 14]
+    # 费用行列宽（与主行对齐，缩进到"份数"列之后）
     SEP = "  "
     tdf: pd.DataFrame = r["trades_df"]
     display_rows = tdf if show_all else tdf.tail(10)
     label = f"全部 {len(tdf)}" if show_all else f"最近 {min(10, len(tdf))}"
     print(f"\n【{label} 笔交易明细】")
     header = SEP.join([
-        _ljust("日期",   C[0]),
-        _rjust("开盘价", C[1]),
-        _rjust("收盘价", C[2]),
-        _rjust("价差%",  C[3]),
-        _rjust("手数",   C[4]),
-        _rjust("盈亏",   C[5]),
-        _rjust("累计资金", C[6]),
+        _ljust("日期",     C[0]),
+        _rjust("开盘价",   C[1]),
+        _rjust("收盘价",   C[2]),
+        _rjust("价差%",    C[3]),
+        _rjust("份数",     C[4]),
+        _rjust("买入金额", C[5]),
+        _rjust("净盈亏",   C[6]),
+        _rjust("累计资金", C[7]),
     ])
     total_w = sum(C) + len(SEP) * (len(C) - 1)
     print(f"  {header}")
     print(f"  {'─' * total_w}")
     for _, row in display_rows.iterrows():
-        line = SEP.join([
+        main_line = SEP.join([
             _ljust(str(row['date']),                   C[0]),
             _rjust(f"{row['sell_price']:.3f}",         C[1]),
             _rjust(f"{row['buy_price']:.3f}",          C[2]),
             _rjust(f"{row['spread_pct']:+.2f}%",       C[3]),
             _rjust(f"{row['volume']:,}",               C[4]),
-            _rjust(f"{row['pnl']:+,.2f}",              C[5]),
-            _rjust(f"{row['capital']:,.2f}",           C[6]),
+            _rjust(f"{row['buy_amount']:,.2f}",        C[5]),
+            _rjust(f"{row['pnl']:+,.2f}",              C[6]),
+            _rjust(f"{row['capital']:,.2f}",           C[7]),
         ])
-        print(f"  {line}")
+        # 费用明细行（缩进对齐到份数列之后）
+        fee_indent = sum(C[:5]) + len(SEP) * 5
+        fee_line = (
+            f"{'':>{fee_indent}}"
+            f"佣金 {row['commission']:.2f}"
+            + (f"  印花税 {row['stamp_tax']:.2f}" if row['stamp_tax'] > 0 else "")
+            + f"  过户费 {row['transfer_fee']:.2f}"
+            + f"  合计手续费 {row['total_fees']:.2f}"
+        )
+        print(f"  {main_line}")
+        print(f"  {fee_line}")
 
     print("=" * W + "\n")
 
