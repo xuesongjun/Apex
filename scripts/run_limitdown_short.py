@@ -180,7 +180,7 @@ def run_backtest(
             "total_fees": round(total_fees, 2),
             "raw_pnl": round(raw_pnl, 2),
             "pnl": round(pnl, 2),
-            "capital_before": round(capital_before, 2),
+            "nav_open": round(capital_before, 2),
             "capital": round(capital, 2),
         })
 
@@ -284,12 +284,12 @@ def _export_csv(tdf: pd.DataFrame, path: str):
                "sell_amount", "buy_amount",
                "sell_commission", "buy_commission", "commission",
                "stamp_tax", "transfer_fee", "total_fees",
-               "raw_pnl", "pnl", "capital_before", "capital"]].copy()
+               "raw_pnl", "pnl", "nav_open", "capital"]].copy()
     out.columns = ["日期", "开盘价(卖出)", "收盘价(买入)", "价差%", "份数",
                    "卖出金额", "买入金额",
                    "卖出佣金", "买入佣金", "佣金合计",
                    "印花税", "过户费", "合计手续费",
-                   "毛盈亏", "净盈亏", "买前余额", "买后余额"]
+                   "毛盈亏", "净盈亏", "期初净值", "期末净值"]
     out.to_csv(path, index=False, encoding="utf-8-sig")
     print(f"\n[已导出] 全部 {len(out)} 笔交易明细 → {path}")
 
@@ -356,8 +356,8 @@ def _print_report(r: dict, show_all: bool = False):
         _rjust("买入金额", C[6]),
         _rjust("佣金",     C[7]),
         _rjust("净盈亏",   C[8]),
-        _rjust("买前余额", C[9]),
-        _rjust("买后余额", C[10]),
+        _rjust("期初净值", C[9]),
+        _rjust("期末净值", C[10]),
     ])
     total_w = sum(C) + len(SEP) * (len(C) - 1)
     print(f"  {header}")
@@ -373,7 +373,7 @@ def _print_report(r: dict, show_all: bool = False):
             _rjust(f"{row['buy_amount']:,.2f}",     C[6]),
             _rjust(f"{row['commission']:.2f}",      C[7]),
             _rjust(f"{row['pnl']:+,.2f}",           C[8]),
-            _rjust(f"{row['capital_before']:,.2f}", C[9]),
+            _rjust(f"{row['nav_open']:,.2f}", C[9]),
             _rjust(f"{row['capital']:,.2f}",        C[10]),
         ])
         print(f"  {line}")
