@@ -158,6 +158,32 @@ def main():
         initial_capital=args.capital,
     )
 
+    # 检查每只股票的数据库日期范围
+    from data.storage.repository import StockRepository
+    repo = StockRepository()
+    abort = False
+    for code in args.codes:
+        db_start, db_end = repo.get_date_range(code)
+        if db_start is None:
+            print(f"\n[错误] 数据库中没有 {code} 的任何数据，请先运行：")
+            print(f"  python scripts/init_db.py --codes {code} --start {args.start}")
+            abort = True
+            continue
+        if db_start > start_date:
+            print(f"\n[警告] {code} 数据库最早为 {db_start}，晚于请求的起始日期 {start_date}")
+            print(f"  若需要更早数据，请先运行：python scripts/init_db.py --codes {code} --start {args.start}")
+            ans = input(f"  继续使用现有数据（从 {db_start} 开始）回测？[Y/n]: ").strip().lower()
+            if ans == "n":
+                abort = True
+        if db_end < end_date:
+            print(f"\n[警告] {code} 数据库最新为 {db_end}，早于请求的结束日期 {end_date}")
+            print(f"  若需要最新数据，请先运行：python scripts/daily_update.py --codes {code}")
+            ans = input(f"  继续使用现有数据（至 {db_end} 为止）回测？[Y/n]: ").strip().lower()
+            if ans == "n":
+                abort = True
+    if abort:
+        return
+
     result = engine.run()
     result.print_summary()
 

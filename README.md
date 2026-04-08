@@ -92,6 +92,8 @@ python scripts/init_db.py --stock-list-only
 
 ### 3. 策略回测
 
+> 若指定的起止日期超出数据库已有范围，脚本会自动提示并给出补数据命令，按提示操作后重新运行即可。
+
 ```bash
 # 均线交叉策略
 python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01
@@ -119,7 +121,7 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 
 ### 4. 开盘做空策略回测
 
-> 模拟"集合竞价挂跌停价卖出（实际以开盘价成交）+ 收盘前买入"的日内做空逻辑。
+> 模拟"集合竞价挂跌停价卖出（实际以开盘价成交）+ 收盘前买入"的日内做空逻辑。若指定日期超出数据库范围，会自动提示补数据。
 
 ```bash
 # 基本用法（以开盘价卖出，收盘价买回，每日必然触发）

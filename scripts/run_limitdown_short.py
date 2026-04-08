@@ -86,6 +86,25 @@ def run_backtest(
     repo = StockRepository()
     fee_model = FeeModel()
 
+    # 检查数据库日期范围
+    db_start, db_end = repo.get_date_range(code)
+    if db_start is None:
+        print(f"\n[错误] 数据库中没有 {code} 的任何数据，请先运行：")
+        print(f"  python scripts/init_db.py --codes {code} --start {start_date}")
+        return {}
+    if db_start > start_date:
+        print(f"\n[警告] 数据库中 {code} 最早数据为 {db_start}，晚于请求的起始日期 {start_date}")
+        print(f"  若需要更早数据，请先运行：python scripts/init_db.py --codes {code} --start {start_date}")
+        ans = input("  继续使用现有数据（从 {} 开始）回测？[Y/n]: ".format(db_start)).strip().lower()
+        if ans == "n":
+            return {}
+    if db_end < end_date:
+        print(f"\n[警告] 数据库中 {code} 最新数据为 {db_end}，早于请求的结束日期 {end_date}")
+        print(f"  若需要最新数据，请先运行：python scripts/daily_update.py --codes {code}")
+        ans = input("  继续使用现有数据（至 {} 为止）回测？[Y/n]: ".format(db_end)).strip().lower()
+        if ans == "n":
+            return {}
+
     # 加载日K线数据
     df = repo.get_daily_bars(code, start_date, end_date)
     if df.empty:

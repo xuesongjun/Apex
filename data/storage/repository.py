@@ -194,6 +194,18 @@ class StockRepository:
         finally:
             session.close()
 
+    def get_date_range(self, code: str) -> tuple[Optional[date], Optional[date]]:
+        """获取某只股票在数据库中的数据日期范围，返回 (最早日期, 最新日期)"""
+        session = get_session()
+        try:
+            row = session.query(
+                func.min(StockDaily.trade_date),
+                func.max(StockDaily.trade_date),
+            ).filter(StockDaily.code == code).one()
+            return row[0], row[1]
+        finally:
+            session.close()
+
     def _apply_adj_factor(
         self, code: str, df: pd.DataFrame, adj: str
     ) -> pd.DataFrame:
