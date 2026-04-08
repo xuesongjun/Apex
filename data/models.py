@@ -184,6 +184,104 @@ class StockFinance(Base):
     )
 
 
+# ========== 模拟盘账户 ==========
+class PaperAccount(Base):
+    """
+    模拟盘账户表
+    每个策略实例对应一行，记录资金状态
+    """
+    __tablename__ = "paper_account"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_name    = Column(String(50), nullable=False, unique=True, comment="策略名称（唯一标识）")
+    initial_capital  = Column(Float, nullable=False, comment="初始资金（不可变）")
+    cash             = Column(Float, nullable=False, comment="当前可用现金")
+    total_commission = Column(Float, default=0.0, comment="累计佣金")
+    total_tax        = Column(Float, default=0.0, comment="累计印花税")
+    stock_codes      = Column(Text, comment="标的列表（JSON 序列化）")
+    created_at       = Column(DateTime, default=datetime.now)
+    updated_at       = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+# ========== 模拟盘持仓 ==========
+class PaperPosition(Base):
+    """
+    模拟盘持仓表
+    记录每个策略对每只股票的实时持仓状态
+    """
+    __tablename__ = "paper_position"
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_name = Column(String(50), nullable=False, comment="策略名称")
+    code          = Column(String(10), nullable=False, comment="股票代码")
+    volume        = Column(Integer, nullable=False, default=0, comment="总持仓量（股）")
+    available     = Column(Integer, nullable=False, default=0, comment="可卖量（T+1 规则）")
+    cost_price    = Column(Float, nullable=False, default=0.0, comment="持仓均价")
+    current_price = Column(Float, default=0.0, comment="最新收盘价（每日更新）")
+    buy_date      = Column(Date, comment="最近一次买入日（T+1 判断用）")
+    updated_at    = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("strategy_name", "code", name="uix_paper_pos_strategy_code"),
+        Index("ix_paper_pos_strategy", "strategy_name"),
+    )
+
+
+# ========== 模拟盘订单 ==========
+class PaperOrder(Base):
+    """
+    模拟盘订单表
+    每笔委托的完整生命周期记录（pending → filled/cancelled/rejected）
+    """
+    __tablename__ = "paper_order"
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    order_id      = Column(String(32), nullable=False, unique=True, comment="UUID 订单号")
+    strategy_name = Column(String(50), nullable=False, comment="策略名称")
+    code          = Column(String(10), nullable=False, comment="股票代码")
+    direction     = Column(String(4), nullable=False, comment="BUY / SELL")
+    signal_date   = Column(Date, nullable=False, comment="信号产生日（收盘后）")
+    execute_date  = Column(Date, comment="计划执行日（下一交易日，以开盘价成交）")
+    status        = Column(String(10), nullable=False, default="pending",
+                           comment="pending / filled / cancelled / rejected")
+    req_volume    = Column(Integer, nullable=False, comment="委托数量（策略请求）")
+    filled_price  = Column(Float, default=0.0, comment="实际成交价")
+    filled_volume = Column(Integer, default=0, comment="实际成交量")
+    commission    = Column(Float, default=0.0, comment="手续费")
+    reason        = Column(Text, comment="信号原因 / 拒绝原因")
+    created_at    = Column(DateTime, default=datetime.now)
+    updated_at    = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index("ix_paper_order_strategy_status", "strategy_name", "status"),
+        Index("ix_paper_order_execute_date", "execute_date"),
+    )
+
+
+# ========== 模拟盘净值 ==========
+class PaperNav(Base):
+    """
+    模拟盘每日净值快照
+    用于绩效分析和净值曲线绘制
+    """
+    __tablename__ = "paper_nav"
+
+    id             = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_name  = Column(String(50), nullable=False, comment="策略名称")
+    trade_date     = Column(Date, nullable=False, comment="交易日")
+    cash           = Column(Float, comment="可用现金")
+    market_value   = Column(Float, comment="持仓市值（收盘价）")
+    total_equity   = Column(Float, comment="总资产 = 现金 + 市值")
+    nav            = Column(Float, comment="单位净值 = 总资产 / 初始资金")
+    daily_pnl      = Column(Float, comment="当日盈亏")
+    position_count = Column(Integer, comment="持仓标的数量")
+
+    __table_args__ = (
+        UniqueConstraint("strategy_name", "trade_date", name="uix_paper_nav_strategy_date"),
+        Index("ix_paper_nav_strategy", "strategy_name"),
+    )
+
+
 # ========== 数据库引擎与会话 ==========
 
 def get_engine():

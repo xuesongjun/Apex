@@ -10,9 +10,16 @@ from loguru import logger
 from sqlalchemy import select, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+import json
+import uuid
+
 from data.models import (
     AdjFactor,
     IndexDaily,
+    PaperAccount as PaperAccountORM,
+    PaperNav,
+    PaperOrder as PaperOrderORM,
+    PaperPosition as PaperPositionORM,
     StockBasic,
     StockDaily,
     StockFinance,
@@ -359,5 +366,236 @@ class StockRepository:
             session.rollback()
             logger.error(f"保存指数日K线失败 {code}: {e}")
             raise
+        finally:
+            session.close()
+
+
+class PaperRepository:
+    """模拟盘数据仓库，封装模拟盘4张表的 CRUD 操作"""
+
+    # ========== paper_account ==========
+
+    def get_paper_account(self, strategy_name: str) -> Optional[PaperAccountORM]:
+        """获取模拟盘账户"""
+        session = get_session()
+        try:
+            return session.query(PaperAccountORM).filter_by(
+                strategy_name=strategy_name
+            ).first()
+        finally:
+            session.close()
+
+    def create_paper_account(
+        self, strategy_name: str, initial_capital: float, stock_codes: list[str]
+    ) -> None:
+        """创建新的模拟盘账户"""
+        session = get_session()
+        try:
+            account = PaperAccountORM(
+                strategy_name=strategy_name,
+                initial_capital=initial_capital,
+                cash=initial_capital,
+                stock_codes=json.dumps(stock_codes),
+            )
+            session.add(account)
+            session.commit()
+            logger.info(f"模拟盘账户已创建：{strategy_name}，初始资金 {initial_capital:,.2f}")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"创建模拟盘账户失败: {e}")
+            raise
+        finally:
+            session.close()
+
+    def update_paper_account(
+        self,
+        strategy_name: str,
+        cash: float,
+        total_commission: float,
+        total_tax: float,
+    ) -> None:
+        """更新账户资金状态"""
+        session = get_session()
+        try:
+            session.query(PaperAccountORM).filter_by(
+                strategy_name=strategy_name
+            ).update({
+                "cash": cash,
+                "total_commission": total_commission,
+                "total_tax": total_tax,
+            })
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"更新账户失败 {strategy_name}: {e}")
+            raise
+        finally:
+            session.close()
+
+    # ========== paper_position ==========
+
+    def get_paper_positions(self, strategy_name: str) -> list[PaperPositionORM]:
+        """获取某策略的全部持仓"""
+        session = get_session()
+        try:
+            return session.query(PaperPositionORM).filter_by(
+                strategy_name=strategy_name
+            ).all()
+        finally:
+            session.close()
+
+    def upsert_paper_positions(
+        self, strategy_name: str, positions: list[dict]
+    ) -> None:
+        """批量更新持仓（upsert）"""
+        if not positions:
+            return
+        session = get_session()
+        try:
+            stmt = sqlite_insert(PaperPositionORM).values(positions)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["strategy_name", "code"],
+                set_={
+                    "volume": stmt.excluded.volume,
+                    "available": stmt.excluded.available,
+                    "cost_price": stmt.excluded.cost_price,
+                    "current_price": stmt.excluded.current_price,
+                    "buy_date": stmt.excluded.buy_date,
+                },
+            )
+            session.execute(stmt)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"更新持仓失败: {e}")
+            raise
+        finally:
+            session.close()
+
+    def delete_paper_position(self, strategy_name: str, code: str) -> None:
+        """删除已清空的持仓"""
+        session = get_session()
+        try:
+            session.query(PaperPositionORM).filter_by(
+                strategy_name=strategy_name, code=code
+            ).delete()
+            session.commit()
+        finally:
+            session.close()
+
+    # ========== paper_order ==========
+
+    def save_paper_order(self, order: dict) -> None:
+        """保存一条新订单（通常为 pending 状态）"""
+        if "order_id" not in order:
+            order["order_id"] = uuid.uuid4().hex
+        session = get_session()
+        try:
+            session.add(PaperOrderORM(**order))
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"保存订单失败: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_pending_orders(
+        self, strategy_name: str, execute_date
+    ) -> list[PaperOrderORM]:
+        """获取某策略某日待执行的 pending 订单"""
+        session = get_session()
+        try:
+            return session.query(PaperOrderORM).filter_by(
+                strategy_name=strategy_name,
+                execute_date=execute_date,
+                status="pending",
+            ).all()
+        finally:
+            session.close()
+
+    def update_paper_order(
+        self,
+        order_id: str,
+        status: str,
+        filled_price: float = 0.0,
+        filled_volume: int = 0,
+        commission: float = 0.0,
+        reason: str = "",
+    ) -> None:
+        """更新订单状态（成交/取消/拒绝）"""
+        session = get_session()
+        try:
+            session.query(PaperOrderORM).filter_by(order_id=order_id).update({
+                "status": status,
+                "filled_price": filled_price,
+                "filled_volume": filled_volume,
+                "commission": commission,
+                "reason": reason,
+            })
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"更新订单失败 {order_id}: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_order_history(
+        self, strategy_name: str, start_date=None, end_date=None
+    ) -> list[PaperOrderORM]:
+        """查询订单历史"""
+        session = get_session()
+        try:
+            q = session.query(PaperOrderORM).filter_by(strategy_name=strategy_name)
+            if start_date:
+                q = q.filter(PaperOrderORM.signal_date >= start_date)
+            if end_date:
+                q = q.filter(PaperOrderORM.signal_date <= end_date)
+            return q.order_by(PaperOrderORM.signal_date.desc()).all()
+        finally:
+            session.close()
+
+    # ========== paper_nav ==========
+
+    def nav_exists(self, strategy_name: str, trade_date) -> bool:
+        """检查当日净值快照是否已存在（防重复运行）"""
+        session = get_session()
+        try:
+            return session.query(PaperNav).filter_by(
+                strategy_name=strategy_name, trade_date=trade_date
+            ).first() is not None
+        finally:
+            session.close()
+
+    def save_paper_nav(self, nav: dict) -> None:
+        """保存每日净值快照"""
+        session = get_session()
+        try:
+            stmt = sqlite_insert(PaperNav).values([nav]).on_conflict_do_update(
+                index_elements=["strategy_name", "trade_date"],
+                set_={k: v for k, v in nav.items() if k not in ("strategy_name", "trade_date")},
+            )
+            session.execute(stmt)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"保存净值快照失败: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_nav_series(
+        self, strategy_name: str, start_date=None, end_date=None
+    ) -> list[PaperNav]:
+        """获取净值曲线（按日期升序）"""
+        session = get_session()
+        try:
+            q = session.query(PaperNav).filter_by(strategy_name=strategy_name)
+            if start_date:
+                q = q.filter(PaperNav.trade_date >= start_date)
+            if end_date:
+                q = q.filter(PaperNav.trade_date <= end_date)
+            return q.order_by(PaperNav.trade_date).all()
         finally:
             session.close()

@@ -292,6 +292,46 @@ strategies:
     signal_period: 9
 ```
 
+## 模拟盘交易
+
+> 每日收盘后（15:30）运行一次，自动执行昨日挂单、生成明日委托，账户状态持久化到数据库。
+
+```bash
+# 首次初始化账户 + 当日运行（收盘后执行）
+python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 600519 --capital 1000000
+
+# 查看账户当前状态、持仓、待执行订单
+python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --status
+
+# 查看最近 30 天净值记录
+python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --history 30
+
+# 自定义策略参数
+python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 \
+    --params short_period=5 long_period=20
+
+# 补跑历史日期（模拟从某日开始的运行）
+python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024-03-15
+```
+
+**每日执行流程：**
+
+| 步骤 | 动作 |
+|------|------|
+| 1 | 加载账户（首次自动创建），T+1 解冻昨日买入持仓 |
+| 2 | 加载今日 K 线（停牌标的自动跳过） |
+| 3 | 执行昨日挂单（以今日开盘价成交，涨跌停/停牌自动取消） |
+| 4 | 按今日收盘价更新持仓估值 |
+| 5 | 运行策略，生成明日委托信号 |
+| 6 | 记录今日净值快照 |
+
+**cron 注册（每个工作日 15:30 自动运行）：**
+
+```bash
+30 15 * * 1-5  cd /path/to/Apex && .venv/bin/python scripts/run_paper_trade.py \
+               --strategy ma_cross --codes 000001 600519
+```
+
 ## 可用策略
 
 | 策略 | 命令行名称 | 说明 |
@@ -320,7 +360,7 @@ strategies:
 - [x] 开盘做空回测策略（`run_limitdown_short.py`）
 - [ ] Phase 3: 策略库扩展（KDJ、布林带、RSI、多因子）
 - [ ] Phase 4: 风控模块（仓位控制、止损止盈、黑名单）
-- [ ] Phase 5: 模拟交易
+- [x] Phase 5: 模拟交易（`scripts/run_paper_trade.py`）
 - [ ] Phase 6: Web 可视化（FastAPI + Vue 3 + ECharts）
 - [ ] Phase 7: 实盘对接（QMT/miniQMT）
 
