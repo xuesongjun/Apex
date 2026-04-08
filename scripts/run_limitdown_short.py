@@ -115,6 +115,7 @@ def run_backtest(
     stock_info = repo.get_stock_info(code)
     is_st = stock_info.is_st if stock_info else False
     stock_name = stock_info.name if stock_info else code
+    is_etf = TradingRules.is_etf(code)
 
     # 去掉没有昨收价的行（通常是第一行）
     df = df.dropna(subset=["pre_close"])
@@ -155,11 +156,9 @@ def run_backtest(
         if volume <= 0:
             continue
 
-        # 计算费用
-        # 卖出（空头开仓）：佣金 + 印花税 + 过户费
-        sell_fees = fee_model.calculate(sell_price, volume, Direction.SELL)
-        # 买入（空头平仓）：佣金 + 过户费（无印花税）
-        buy_fees = fee_model.calculate(buy_price, volume, Direction.BUY)
+        # 计算费用（ETF 免征印花税）
+        sell_fees = fee_model.calculate(sell_price, volume, Direction.SELL, is_etf=is_etf)
+        buy_fees  = fee_model.calculate(buy_price,  volume, Direction.BUY,  is_etf=is_etf)
         total_fees = sell_fees.total + buy_fees.total
 
         # 单笔盈亏 = (卖价 - 买价) × 股数 - 总费用

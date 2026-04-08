@@ -37,6 +37,11 @@ class TradingRules:
         return limits.get("main_board", 0.10)  # 主板 / 普通ETF
 
     @staticmethod
+    def is_etf(code: str) -> bool:
+        """判断是否为 ETF（沪市51xxxx / 深市159xxx）"""
+        return code.startswith("51") or code.startswith("159")
+
+    @staticmethod
     def is_cross_border_etf(code: str) -> bool:
         """
         判断是否为跨境 ETF（追踪境外指数，A股涨跌停幅度为 ±15%）

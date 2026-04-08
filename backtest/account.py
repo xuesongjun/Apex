@@ -77,7 +77,9 @@ class Account:
         """
         price = order.price
         volume = order.volume
-        fees = self.fee_model.calculate(price, volume, Direction.BUY)
+        from backtest.rules import TradingRules
+        fees = self.fee_model.calculate(price, volume, Direction.BUY,
+                                        is_etf=TradingRules.is_etf(order.code))
         total_cost = price * volume + fees.total
 
         # 资金不足检查
@@ -140,7 +142,9 @@ class Account:
 
         price = order.price
         volume = order.volume
-        fees = self.fee_model.calculate(price, volume, Direction.SELL)
+        from backtest.rules import TradingRules
+        fees = self.fee_model.calculate(price, volume, Direction.SELL,
+                                        is_etf=TradingRules.is_etf(order.code))
         proceeds = price * volume - fees.total
 
         # 增加资金

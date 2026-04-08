@@ -33,15 +33,16 @@ class FeeModel:
         self.transfer_fee_rate = transfer_fee_rate or TradingRulesConfig.transfer_fee_rate
 
     def calculate(
-        self, price: float, volume: int, direction: Direction
+        self, price: float, volume: int, direction: Direction, is_etf: bool = False
     ) -> FeeResult:
         """
         计算交易费用
 
         参数:
-            price: 成交价格
-            volume: 成交数量（股）
+            price:     成交价格
+            volume:    成交数量（股）
             direction: 交易方向
+            is_etf:    是否为 ETF（ETF 免征印花税）
 
         返回:
             FeeResult 费用明细
@@ -51,9 +52,9 @@ class FeeModel:
         # 佣金（买卖都收，有最低限额）
         commission = max(amount * self.commission_rate, self.min_commission)
 
-        # 印花税（仅卖出收取，千分之一）
+        # 印花税（仅个股卖出收取，ETF 免征）
         stamp_tax = 0.0
-        if direction == Direction.SELL:
+        if direction == Direction.SELL and not is_etf:
             stamp_tax = amount * self.stamp_tax_rate
 
         # 过户费（买卖都收）
