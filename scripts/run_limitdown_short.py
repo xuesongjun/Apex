@@ -338,9 +338,9 @@ def _print_report(r: dict, show_all: bool = False):
     kv("当日上涨天数",  f"{r['open_lt_close_days']:>{VW}d}  （开 ≤ 收，空头亏损）")
     kv("平均开收价差",  f"{r['avg_spread']:>+{VW}.4f} 元")
 
-    # 明细表
-    # 主行列宽：日期12  开盘价9  收盘价9  价差%9  份数10  买前余额12  净盈亏12  买后余额14
-    C = [12, 9, 9, 9, 10, 12, 12, 14]
+    # 明细表（单行，列：日期/开盘价/收盘价/价差%/份数/卖出金额/买入金额/佣金/净盈亏/买前余额/买后余额）
+    # 列宽（终端显示宽度）
+    C = [12, 9, 9, 8, 10, 12, 12, 8, 10, 12, 12]
     SEP = "  "
     tdf: pd.DataFrame = r["trades_df"]
     display_rows = tdf if show_all else tdf.tail(10)
@@ -352,35 +352,31 @@ def _print_report(r: dict, show_all: bool = False):
         _rjust("收盘价",   C[2]),
         _rjust("价差%",    C[3]),
         _rjust("份数",     C[4]),
-        _rjust("买前余额", C[5]),
-        _rjust("净盈亏",   C[6]),
-        _rjust("买后余额", C[7]),
+        _rjust("卖出金额", C[5]),
+        _rjust("买入金额", C[6]),
+        _rjust("佣金",     C[7]),
+        _rjust("净盈亏",   C[8]),
+        _rjust("买前余额", C[9]),
+        _rjust("买后余额", C[10]),
     ])
     total_w = sum(C) + len(SEP) * (len(C) - 1)
     print(f"  {header}")
     print(f"  {'─' * total_w}")
     for _, row in display_rows.iterrows():
-        main_line = SEP.join([
-            _ljust(str(row['date']),                    C[0]),
-            _rjust(f"{row['sell_price']:.3f}",          C[1]),
-            _rjust(f"{row['buy_price']:.3f}",           C[2]),
-            _rjust(f"{row['spread_pct']:+.2f}%",        C[3]),
-            _rjust(f"{row['volume']:,}",                C[4]),
-            _rjust(f"{row['capital_before']:,.2f}",     C[5]),
-            _rjust(f"{row['pnl']:+,.2f}",               C[6]),
-            _rjust(f"{row['capital']:,.2f}",            C[7]),
+        line = SEP.join([
+            _ljust(str(row['date']),                C[0]),
+            _rjust(f"{row['sell_price']:.3f}",      C[1]),
+            _rjust(f"{row['buy_price']:.3f}",       C[2]),
+            _rjust(f"{row['spread_pct']:+.2f}%",    C[3]),
+            _rjust(f"{row['volume']:,}",            C[4]),
+            _rjust(f"{row['sell_amount']:,.2f}",    C[5]),
+            _rjust(f"{row['buy_amount']:,.2f}",     C[6]),
+            _rjust(f"{row['commission']:.2f}",      C[7]),
+            _rjust(f"{row['pnl']:+,.2f}",           C[8]),
+            _rjust(f"{row['capital_before']:,.2f}", C[9]),
+            _rjust(f"{row['capital']:,.2f}",        C[10]),
         ])
-        fee_indent = sum(C[:5]) + len(SEP) * 5
-        fee_line = (
-            f"{'':>{fee_indent}}"
-            f"卖出金额 {row['sell_amount']:,.2f}  买入金额 {row['buy_amount']:,.2f}"
-            f"  佣金(卖{row['sell_commission']:.2f}+买{row['buy_commission']:.2f}={row['commission']:.2f})"
-            + (f"  印花税 {row['stamp_tax']:.2f}" if row['stamp_tax'] > 0 else "")
-            + (f"  过户费 {row['transfer_fee']:.2f}" if row['transfer_fee'] > 0 else "")
-            + f"  手续费合计 {row['total_fees']:.2f}"
-        )
-        print(f"  {main_line}")
-        print(f"  {fee_line}")
+        print(f"  {line}")
 
     print("=" * W + "\n")
 
