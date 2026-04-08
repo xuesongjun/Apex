@@ -116,6 +116,18 @@ def main():
         nargs="*",
         help="策略参数 key=value 格式（空格分隔多个）",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="show_all",
+        help="显示全部交易明细（默认只显示最近20笔）",
+    )
+    parser.add_argument(
+        "--csv",
+        default="",
+        metavar="FILE",
+        help="导出全部交易明细到 CSV 文件，如 --csv result.csv",
+    )
     args = parser.parse_args()
 
     setup_logging()
@@ -152,7 +164,11 @@ def main():
     # 打印交易明细
     trades_df = result.get_trades_df()
     if not trades_df.empty:
-        _print_trades(trades_df.tail(20), len(result.trades))
+        display_df = trades_df if args.show_all else trades_df.tail(20)
+        _print_trades(display_df, len(result.trades))
+        if args.csv:
+            trades_df.to_csv(args.csv, index=False, encoding="utf-8-sig")
+            print(f"\n[已导出] 全部 {len(trades_df)} 笔交易明细 → {args.csv}")
     else:
         print("无交易记录")
 
@@ -174,7 +190,10 @@ def _pad_str(s: str, width: int, align: str = ">") -> str:
 def _print_trades(df, total_count: int):
     """格式化打印交易明细"""
     show_count = len(df)
-    print(f"\n【交易明细】（显示最近 {show_count} 笔，共 {total_count} 笔）")
+    if show_count == total_count:
+        print(f"\n【交易明细】（全部 {total_count} 笔）")
+    else:
+        print(f"\n【交易明细】（显示最近 {show_count} 笔，共 {total_count} 笔）")
 
     # 列定义: (表头, 宽度)
     cols = [

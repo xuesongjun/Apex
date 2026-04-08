@@ -109,6 +109,12 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 # 指定初始资金
 python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 \
     --capital 500000
+
+# 显示全部交易明细（默认只显示最近20笔）
+python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --all
+
+# 导出全部交易明细到 CSV
+python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --csv trades.csv
 ```
 
 ### 4. 开盘做空策略回测
@@ -131,6 +137,15 @@ python scripts/run_limitdown_short.py --code 600519 --start 2023-01-01 --shares 
 # 支持 ETF（含跨境 ETF）
 python scripts/run_limitdown_short.py --code 513090 --start 2023-01-01 --capital 500000
 python scripts/run_limitdown_short.py --code 510300 --start 2023-01-01 --capital 500000
+
+# 显示全部每日明细（默认只显示最近10笔）
+python scripts/run_limitdown_short.py --code 513090 --start 2023-01-01 --all
+
+# 导出全部明细到 CSV（Excel 直接打开不乱码）
+python scripts/run_limitdown_short.py --code 513090 --start 2023-01-01 --csv result.csv
+
+# 同时显示全部 + 导出 CSV
+python scripts/run_limitdown_short.py --code 513090 --start 2023-01-01 --all --csv result.csv
 ```
 
 **策略原理：**

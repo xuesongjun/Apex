@@ -67,6 +67,8 @@ def run_backtest(
     end_date: date,
     initial_capital: float = 1_000_000.0,
     fixed_shares: int = 0,
+    show_all: bool = False,
+    csv_path: str = "",
 ) -> dict:
     """
     执行跌停价卖出 + 尾盘买入策略回测
@@ -166,7 +168,9 @@ def run_backtest(
         trades=trades,
         total_bars=len(df),
     )
-    _print_report(result)
+    _print_report(result, show_all=show_all)
+    if csv_path and result.get("trade_count", 0) > 0:
+        _export_csv(result["trades_df"], csv_path)
     return result
 
 
@@ -247,7 +251,17 @@ def _build_result(
     }
 
 
-def _print_report(r: dict):
+def _export_csv(tdf: pd.DataFrame, path: str):
+    """导出每日交易明细到 CSV"""
+    out = tdf[["date", "sell_price", "buy_price", "spread_pct", "volume",
+               "total_fees", "raw_pnl", "pnl", "capital"]].copy()
+    out.columns = ["日期", "开盘价(卖出)", "收盘价(买入)", "价差%",
+                   "手数", "手续费", "毛盈亏", "净盈亏", "累计资金"]
+    out.to_csv(path, index=False, encoding="utf-8-sig")
+    print(f"\n[已导出] 全部 {len(out)} 笔交易明细 → {path}")
+
+
+def _print_report(r: dict, show_all: bool = False):
     if r.get("trade_count", 0) == 0:
         print(f"\n股票 {r['code']}（{r.get('name', '')}）")
         print(f"区间 {r['start_date']} ~ {r['end_date']} 共 {r['total_bars']} 个交易日")
@@ -296,7 +310,9 @@ def _print_report(r: dict):
     C = [12, 8, 8, 9, 10, 12, 14]
     SEP = "  "
     tdf: pd.DataFrame = r["trades_df"]
-    print(f"\n【最近 {min(10, len(tdf))} 笔交易明细】")
+    display_rows = tdf if show_all else tdf.tail(10)
+    label = f"全部 {len(tdf)}" if show_all else f"最近 {min(10, len(tdf))}"
+    print(f"\n【{label} 笔交易明细】")
     header = SEP.join([
         _ljust("日期",   C[0]),
         _rjust("开盘价", C[1]),
@@ -309,7 +325,7 @@ def _print_report(r: dict):
     total_w = sum(C) + len(SEP) * (len(C) - 1)
     print(f"  {header}")
     print(f"  {'─' * total_w}")
-    for _, row in tdf.tail(10).iterrows():
+    for _, row in display_rows.iterrows():
         line = SEP.join([
             _ljust(str(row['date']),                   C[0]),
             _rjust(f"{row['sell_price']:.2f}",         C[1]),
@@ -347,6 +363,18 @@ def main():
         default=0,
         help="固定每笔手数（股），默认 0 = 全仓",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="show_all",
+        help="显示全部交易日明细（默认只显示最近10笔）",
+    )
+    parser.add_argument(
+        "--csv",
+        default="",
+        metavar="FILE",
+        help="导出全部交易明细到 CSV 文件，如 --csv result.csv",
+    )
     args = parser.parse_args()
 
     setup_logging()
@@ -357,6 +385,8 @@ def main():
         end_date=_parse_date(args.end),
         initial_capital=args.capital,
         fixed_shares=args.shares,
+        show_all=args.show_all,
+        csv_path=args.csv,
     )
 
 
