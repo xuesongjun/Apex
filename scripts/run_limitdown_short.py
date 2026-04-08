@@ -117,19 +117,13 @@ def run_backtest(
     stock_name = stock_info.name if stock_info else code
     is_etf = TradingRules.is_etf(code)
 
-    # 去掉没有昨收价的行（通常是第一行）
-    df = df.dropna(subset=["pre_close"])
-    df = df[df["pre_close"] > 0].reset_index(drop=True)
+    # 仅过滤开盘价或收盘价缺失/为0的行（策略只依赖 open 和 close）
+    df = df.dropna(subset=["open", "close"])
+    df = df[(df["open"] > 0) & (df["close"] > 0)].reset_index(drop=True)
 
     if df.empty:
         logger.error("清洗后无有效数据")
         return {}
-
-    actual_start = df["trade_date"].iloc[0]
-    actual_end   = df["trade_date"].iloc[-1]
-    if actual_start != start_date:
-        print(f"[提示] 实际回测区间：{actual_start} ~ {actual_end}"
-              f"（首日因无昨收价已自动跳过）")
 
     capital = initial_capital
     trades = []
