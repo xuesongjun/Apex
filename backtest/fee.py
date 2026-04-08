@@ -27,10 +27,10 @@ class FeeModel:
         stamp_tax_rate: float = None,
         transfer_fee_rate: float = None,
     ):
-        self.commission_rate = commission_rate or TradingRulesConfig.commission_rate
-        self.min_commission = min_commission or TradingRulesConfig.min_commission
-        self.stamp_tax_rate = stamp_tax_rate or TradingRulesConfig.stamp_tax_rate
-        self.transfer_fee_rate = transfer_fee_rate or TradingRulesConfig.transfer_fee_rate
+        self.commission_rate = commission_rate if commission_rate is not None else TradingRulesConfig.commission_rate
+        self.min_commission = min_commission if min_commission is not None else TradingRulesConfig.min_commission
+        self.stamp_tax_rate = stamp_tax_rate if stamp_tax_rate is not None else TradingRulesConfig.stamp_tax_rate
+        self.transfer_fee_rate = transfer_fee_rate if transfer_fee_rate is not None else TradingRulesConfig.transfer_fee_rate
 
     def calculate(
         self, price: float, volume: int, direction: Direction, is_etf: bool = False
