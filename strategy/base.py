@@ -37,10 +37,11 @@ class Signal:
     code: str                          # 股票代码
     direction: Direction               # 交易方向
     trade_date: date                   # 信号日期
-    price: float = 0.0                 # 期望价格（0 表示以开盘价成交）
+    price: float = 0.0                 # 期望价格（0 表示按 execute_at 决定）
     volume: int = 0                    # 期望数量（0 表示由仓位管理决定）
     reason: str = ""                   # 触发原因
     confidence: float = 1.0            # 信号置信度 0.0 ~ 1.0
+    execute_at: str = "next_open"      # 执行时机：next_open=次日开盘 open=当日开盘 close=当日收盘
 
 
 @dataclass
@@ -111,7 +112,7 @@ class BaseStrategy(ABC):
         ...
 
     @abstractmethod
-    def on_bar(self, bar: BarData) -> Optional[Signal]:
+    def on_bar(self, bar: BarData) -> list[Signal]:
         """
         K线驱动：每根K线触发一次
         分析行情数据，决定是否产生交易信号
@@ -120,7 +121,11 @@ class BaseStrategy(ABC):
             bar: 当前K线数据
 
         返回:
-            Signal 对象（产生信号时）或 None（无信号）
+            Signal 列表（可返回0个、1个或多个信号）
+            signal.execute_at 控制执行时机：
+              "next_open"  次日开盘价执行（默认，适合趋势策略）
+              "open"       当日开盘价执行（适合需要当日开盘成交的策略）
+              "close"      当日收盘价执行（适合需要当日收盘成交的策略）
         """
         ...
 

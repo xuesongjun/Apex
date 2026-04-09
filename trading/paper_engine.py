@@ -100,20 +100,32 @@ class PaperEngine:
         self._rebuild_bar_history(run_date)
         signals = self._run_strategy(bar_map, account)
 
-        # ── 步骤7：生成明日 pending 订单 ──
+        # ── 步骤7a：当日执行（execute_at="open"/"close"）──
+        intraday_signals = [s for s in signals if s.execute_at in ("open", "close")]
+        pending_signals  = [s for s in signals if s.execute_at not in ("open", "close")]
+        intraday_result  = self._execute_intraday_signals(intraday_signals, bar_map, account, run_date)
+
+        # ── 步骤5b：当日信号执行后再保存一次 ──
+        if intraday_signals:
+            account.update_prices({code: bar.close for code, bar in bar_map.items()})
+            account.save()
+
+        # ── 步骤7b：生成明日 pending 订单（execute_at="next_open"）──
         next_date = self._next_trade_date(run_date)
-        pending_count = self._create_pending_orders(signals, bar_map, account, run_date, next_date)
+        pending_count = self._create_pending_orders(pending_signals, bar_map, account, run_date, next_date)
 
         # ── 步骤8：记录净值快照 ──
         account.record_nav(run_date)
 
+        total_filled = exec_result["filled"] + intraday_result["filled"]
+        total_rejected = exec_result["rejected"] + intraday_result["rejected"]
         summary = {
             "run_date": run_date,
             "strategy": self.strategy_name,
             "orders_executed": exec_result["total"],
-            "orders_filled": exec_result["filled"],
+            "orders_filled": total_filled,
             "orders_cancelled": exec_result["cancelled"],
-            "orders_rejected": exec_result["rejected"],
+            "orders_rejected": total_rejected,
             "signals_generated": len(signals),
             "pending_for_tomorrow": pending_count,
             "cash": account.cash,
@@ -123,7 +135,8 @@ class PaperEngine:
             "position_count": len(account.positions),
         }
         logger.info(
-            f"运行完成 | 执行订单 {exec_result['filled']}/{exec_result['total']} 笔成交 | "
+            f"运行完成 | 执行订单 {total_filled}/{exec_result['total']} 笔成交 | "
+            f"当日信号成交 {intraday_result['filled']} 笔 | "
             f"生成信号 {len(signals)} 个 | 明日挂单 {pending_count} 笔 | "
             f"总资产 {account.total_equity:,.2f}"
         )
@@ -227,6 +240,95 @@ class PaperEngine:
                 result["filled"] += 1
             else:
                 result["rejected"] += 1
+
+        return result
+
+    # ── 步骤7a：当日执行信号（execute_at="open"/"close"）────────────────
+
+    def _execute_intraday_signals(
+        self,
+        signals: list,
+        bar_map: dict[str, BarData],
+        account,
+        run_date: date,
+    ) -> dict:
+        """
+        立即执行 execute_at="open" 或 "close" 的信号（不生成 pending 订单）。
+
+        execute_at="open"  → 以今日开盘价成交
+        execute_at="close" → 以今日收盘价成交
+        """
+        result = {"total": len(signals), "filled": 0, "rejected": 0}
+
+        # 先处理卖出，再处理买入（释放资金）
+        for direction_filter in (Direction.SELL, Direction.BUY):
+            for signal in signals:
+                if signal.direction != direction_filter:
+                    continue
+                bar = bar_map.get(signal.code)
+                if bar is None:
+                    result["rejected"] += 1
+                    continue
+
+                exec_price = bar.open if signal.execute_at == "open" else bar.close
+
+                # 解析委托量
+                volume = self._resolve_volume(signal, account, bar_map)
+                if volume <= 0:
+                    logger.debug(f"当日信号跳过 {signal.code}：量为0")
+                    result["rejected"] += 1
+                    continue
+
+                # T+1 检查（卖出）
+                if signal.direction == Direction.SELL:
+                    pos = account.positions.get(signal.code)
+                    if not pos or pos.available <= 0:
+                        logger.debug(f"当日卖出信号跳过 {signal.code}：T+1 限制")
+                        result["rejected"] += 1
+                        continue
+
+                od = OrderData(
+                    code=signal.code,
+                    direction=signal.direction,
+                    price=exec_price,
+                    volume=volume,
+                    trade_date=run_date,
+                    order_id=uuid.uuid4().hex,
+                    reason=signal.reason or "",
+                )
+                if signal.direction == Direction.BUY:
+                    od = account.process_buy(od)
+                else:
+                    od = account.process_sell(od)
+
+                # 持久化订单记录
+                self._paper_repo.save_paper_order({
+                    "order_id": od.order_id,
+                    "strategy_name": self.strategy_name,
+                    "code": signal.code,
+                    "direction": signal.direction.value,
+                    "signal_date": run_date,
+                    "execute_date": run_date,
+                    "status": od.status,
+                    "req_volume": volume,
+                    "reason": signal.reason or "",
+                })
+                if od.status == "filled":
+                    self._paper_repo.update_paper_order(
+                        od.order_id,
+                        status="filled",
+                        filled_price=od.filled_price,
+                        filled_volume=od.filled_volume,
+                        commission=od.commission,
+                    )
+                    result["filled"] += 1
+                    logger.info(
+                        f"当日信号成交 [{signal.execute_at}] "
+                        f"{signal.direction.value} {signal.code} "
+                        f"{od.filled_volume}股 @ {od.filled_price:.3f}"
+                    )
+                else:
+                    result["rejected"] += 1
 
         return result
 

@@ -31,11 +31,11 @@ class MACDStrategy(BaseStrategy):
     def name(self) -> str:
         return f"MACD({self.fast_period}/{self.slow_period}/{self.signal_period})"
 
-    def on_bar(self, bar: BarData) -> Optional[Signal]:
+    def on_bar(self, bar: BarData) -> list[Signal]:
         closes = self.get_close_series(bar.code)
         min_len = self.slow_period + self.signal_period
         if len(closes) < min_len:
-            return None
+            return []
 
         code = bar.code
         fast_mul = 2 / (self.fast_period + 1)
@@ -83,26 +83,26 @@ class MACDStrategy(BaseStrategy):
         if prev_hist <= 0 and curr_hist > 0:
             if not self.has_position(code):
                 strength = "强" if curr_dif > 0 else "弱"
-                return Signal(
+                return [Signal(
                     code=code,
                     direction=Direction.BUY,
                     trade_date=bar.trade_date,
                     reason=f"MACD金叉({strength}): DIF={curr_dif:.3f}, HIST={curr_hist:.3f}",
                     confidence=0.9 if curr_dif > 0 else 0.6,
-                )
+                )]
 
         # 死叉：MACD柱从正转负
         if prev_hist >= 0 and curr_hist < 0:
             if self.has_position(code):
-                return Signal(
+                return [Signal(
                     code=code,
                     direction=Direction.SELL,
                     trade_date=bar.trade_date,
                     reason=f"MACD死叉: DIF={curr_dif:.3f}, HIST={curr_hist:.3f}",
                     confidence=0.8,
-                )
+                )]
 
-        return None
+        return []
 
 
 def _ema_series_full(values: list[float], period: int) -> list[float]:

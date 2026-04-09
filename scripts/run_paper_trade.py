@@ -23,7 +23,6 @@ cron 注册示例（每个工作日 15:30 运行）：
                    --strategy ma_cross --codes 000001 600519
 """
 import argparse
-import importlib
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -36,35 +35,9 @@ from config import setup_logging
 from data.models import init_db
 from data.storage.repository import PaperRepository, StockRepository
 from strategy.base import Direction
+from strategy.registry import STRATEGY_REGISTRY, load_strategy
 from trading.paper_account import PaperAccount
 from trading.paper_engine import PaperEngine
-
-
-# ── 策略注册表（与 run_backtest.py 保持同步）──────────────────────────────
-STRATEGY_MAP = {
-    "ma_cross": {
-        "class": "strategy.technical.ma_cross.MACrossStrategy",
-        "description": "均线交叉策略",
-        "default_params": {"short_period": 5, "long_period": 20, "ma_type": "EMA"},
-    },
-    "macd": {
-        "class": "strategy.technical.macd_strategy.MACDStrategy",
-        "description": "MACD 策略",
-        "default_params": {"fast_period": 12, "slow_period": 26, "signal_period": 9},
-    },
-}
-
-
-def load_strategy(name: str, params: dict):
-    if name not in STRATEGY_MAP:
-        available = ", ".join(STRATEGY_MAP.keys())
-        raise ValueError(f"未知策略: {name}，可用策略: {available}")
-    info = STRATEGY_MAP[name]
-    module_path, class_name = info["class"].rsplit(".", 1)
-    module = importlib.import_module(module_path)
-    cls = getattr(module, class_name)
-    config = {**info["default_params"], **params}
-    return cls(config)
 
 
 def parse_params(param_strings: list[str]) -> dict:
@@ -249,7 +222,7 @@ def print_summary(summary: dict):
 def main():
     parser = argparse.ArgumentParser(description="A股模拟盘交易")
     parser.add_argument("--strategy", "-s", required=True,
-                        help=f"策略名称：{', '.join(STRATEGY_MAP.keys())}")
+                        help=f"策略名称：{', '.join(STRATEGY_REGISTRY.keys())}")
     parser.add_argument("--codes", "-c", nargs="+", required=True,
                         help="股票代码（空格分隔）")
     parser.add_argument("--capital", type=float, default=1_000_000,

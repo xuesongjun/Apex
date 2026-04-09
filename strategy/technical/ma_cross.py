@@ -31,10 +31,10 @@ class MACrossStrategy(BaseStrategy):
     def name(self) -> str:
         return f"MA交叉({self.short_period}/{self.long_period} {self.ma_type})"
 
-    def on_bar(self, bar: BarData) -> Optional[Signal]:
+    def on_bar(self, bar: BarData) -> list[Signal]:
         closes = self.get_close_series(bar.code)
         if len(closes) < self.long_period + 1:
-            return None
+            return []
 
         code = bar.code
 
@@ -71,7 +71,7 @@ class MACrossStrategy(BaseStrategy):
         # 金叉：短期均线从下方上穿长期均线
         if short_ma_prev <= long_ma_prev and short_ma_curr > long_ma_curr:
             if not self.has_position(code):
-                return Signal(
+                return [Signal(
                     code=code,
                     direction=Direction.BUY,
                     trade_date=bar.trade_date,
@@ -79,12 +79,12 @@ class MACrossStrategy(BaseStrategy):
                     volume=0,
                     reason=f"金叉: MA{self.short_period}={short_ma_curr:.2f} 上穿 MA{self.long_period}={long_ma_curr:.2f}",
                     confidence=0.8,
-                )
+                )]
 
         # 死叉：短期均线从上方下穿长期均线
         if short_ma_prev >= long_ma_prev and short_ma_curr < long_ma_curr:
             if self.has_position(code):
-                return Signal(
+                return [Signal(
                     code=code,
                     direction=Direction.SELL,
                     trade_date=bar.trade_date,
@@ -92,9 +92,9 @@ class MACrossStrategy(BaseStrategy):
                     volume=0,
                     reason=f"死叉: MA{self.short_period}={short_ma_curr:.2f} 下穿 MA{self.long_period}={long_ma_curr:.2f}",
                     confidence=0.8,
-                )
+                )]
 
-        return None
+        return []
 
     @staticmethod
     def _calc_ema_full(prices: list[float], period: int) -> float:

@@ -108,9 +108,7 @@ class BacktestEngine:
             # 推送K线给策略，收集信号
             for bar in bars_today:
                 self.strategy._update_bar(bar)
-                signal = self.strategy.on_bar(bar)
-                if signal is not None:
-                    signals.append(signal)
+                signals.extend(self.strategy.on_bar(bar))
 
             # 处理信号（先卖后买，释放资金）
             sell_signals = [s for s in signals if s.direction == Direction.SELL]
@@ -183,11 +181,14 @@ class BacktestEngine:
         if bar is None:
             return
 
-        # 确定成交价格（模拟以开盘价成交 + 滑点）
-        if signal.price <= 0:
-            exec_price = bar.open
-        else:
+        # 确定成交价格（按 execute_at 决定：open/next_open=开盘价，close=收盘价）
+        if signal.price > 0:
             exec_price = signal.price
+        elif signal.execute_at == "close":
+            exec_price = bar.close
+        else:
+            # "open" 和 "next_open" 均以当日开盘价模拟
+            exec_price = bar.open
 
         # 加入滑点
         if signal.direction == Direction.BUY:
