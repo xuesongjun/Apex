@@ -299,9 +299,14 @@ strategies:
 
 ## 模拟盘交易
 
-> 每日收盘后（15:30）运行一次，自动执行昨日挂单、生成明日委托，账户状态持久化到数据库。
+> 每日收盘后运行一次，自动执行昨日挂单、生成明日委托，账户状态持久化到数据库。
+
+> **前提**：模拟盘依赖本地数据库中的行情和交易日历数据。运行前请先执行 `python scripts/daily_update.py` 确保数据已更新至当日。若提示"不是交易日"或"无行情数据"，通常是数据库未更新所致。
 
 ```bash
+# 0. 运行前先更新数据（每个交易日收盘后执行）
+python scripts/daily_update.py
+
 # 均线交叉策略：首次初始化账户 + 当日运行
 python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 600519 --capital 1000000
 
@@ -318,7 +323,7 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --history 3
 python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 \
     --params short_period=5 long_period=20
 
-# 补跑历史日期（模拟从某日开始的运行）
+# 补跑历史日期（数据库中已有数据的日期）
 python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024-03-15
 ```
 
@@ -326,6 +331,7 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 
 | 步骤 | 动作 |
 |------|------|
+| 0 | 先运行 `daily_update.py` 更新行情和交易日历 |
 | 1 | 加载账户（首次自动创建），T+1 解冻昨日买入持仓 |
 | 2 | 加载今日 K 线（停牌标的自动跳过） |
 | 3 | 执行昨日挂单（以今日开盘价成交，涨跌停/停牌自动取消） |
@@ -333,10 +339,12 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 | 5 | 运行策略，生成信号：`execute_at="next_open"` → 明日挂单；`execute_at="open"/"close"` → 当日立即成交 |
 | 6 | 记录今日净值快照 |
 
-**cron 注册（每个工作日 15:30 自动运行）：**
+**cron 注册（每个工作日 16:30 先更新数据，16:35 再运行模拟盘）：**
 
 ```bash
-30 15 * * 1-5  cd /path/to/Apex && .venv/bin/python scripts/run_paper_trade.py \
+# 先更新数据（16:30），再运行模拟盘（16:35）
+30 16 * * 1-5  cd /path/to/Apex && .venv/bin/python scripts/daily_update.py
+35 16 * * 1-5  cd /path/to/Apex && .venv/bin/python scripts/run_paper_trade.py \
                --strategy ma_cross --codes 000001 600519
 ```
 
