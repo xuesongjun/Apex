@@ -38,23 +38,28 @@ A股量化交易系统，涵盖行情数据采集、策略引擎、回测框架�
 │   └── collector.py            # 数据采集调度器
 ├── strategy/                   # 策略模块
 │   ├── base.py                 # 策略基类 + 数据结构
+│   ├── registry.py             # 策略注册表（插件入口）
 │   └── technical/              # 技术指标策略
 │       ├── ma_cross.py         # 均线交叉策略
-│       └── macd_strategy.py    # MACD 策略
+│       ├── macd_strategy.py    # MACD 策略
+│       └── limitdown_short.py  # 跌停做空策略
 ├── backtest/                   # 回测模块
 │   ├── engine.py               # 回测引擎
 │   ├── account.py              # 账户管理
 │   ├── fee.py                  # 费用模型
 │   ├── rules.py                # A股交易规则
 │   └── metrics.py              # 绩效评估
-├── trading/                    # 交易执行（待开发）
+├── trading/                    # 模拟盘执行
+│   ├── paper_engine.py         # 模拟盘每日引擎
+│   └── paper_account.py        # 持久化模拟账户
 ├── risk/                       # 风控模块（待开发）
 ├── api/                        # Web API（待开发）
 ├── scripts/
 │   ├── init_db.py              # 数据库初始化
 │   ├── daily_update.py         # 每日数据更新
 │   ├── run_backtest.py         # 策略回测入口
-│   ├── run_limitdown_short.py  # 开盘做空回测策略
+│   ├── run_paper_trade.py      # 模拟盘运行入口
+│   ├── run_limitdown_short.py  # 开盘做空回测策略（独立脚本）
 │   └── query_stock.py          # 数据查询验证工具
 └── requirements.txt
 ```
@@ -297,8 +302,11 @@ strategies:
 > 每日收盘后（15:30）运行一次，自动执行昨日挂单、生成明日委托，账户状态持久化到数据库。
 
 ```bash
-# 首次初始化账户 + 当日运行（收盘后执行）
+# 均线交叉策略：首次初始化账户 + 当日运行
 python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 600519 --capital 1000000
+
+# 跌停做空策略（开盘卖出 + 收盘买入，当日执行）
+python scripts/run_paper_trade.py --strategy limitdown_short --codes 513090 --capital 1000000
 
 # 查看账户当前状态、持仓、待执行订单
 python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --status
@@ -322,7 +330,7 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 | 2 | 加载今日 K 线（停牌标的自动跳过） |
 | 3 | 执行昨日挂单（以今日开盘价成交，涨跌停/停牌自动取消） |
 | 4 | 按今日收盘价更新持仓估值 |
-| 5 | 运行策略，生成明日委托信号 |
+| 5 | 运行策略，生成信号：`execute_at="next_open"` → 明日挂单；`execute_at="open"/"close"` → 当日立即成交 |
 | 6 | 记录今日净值快照 |
 
 **cron 注册（每个工作日 15:30 自动运行）：**
@@ -334,14 +342,38 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 
 ## 可用策略
 
-| 策略 | 命令行名称 | 说明 |
-|------|-----------|------|
-| 均线交叉 | `ma_cross` | 短期均线上穿/下穿长期均线，支持 SMA/EMA |
-| MACD | `macd` | DIF 与 DEA 金叉/死叉 |
-| 开盘做空 | `run_limitdown_short.py` | 开盘卖出 + 尾盘买入，每日必然触发 |
+所有策略均已注册到 `strategy/registry.py`，可直接通过 `--strategy` 参数使用：
+
+| 命令行名称 | 策略 | 适用场景 |
+|-----------|------|---------|
+| `ma_cross` | 均线交叉 | 趋势跟踪，短均线金叉/死叉长均线，次日开盘执行 |
+| `macd` | MACD | 趋势动量，DIF/DEA 金叉死叉，次日开盘执行 |
+| `limitdown_short` | 跌停做空 | 每日开盘卖出（集合竞价）+ 收盘买入，当日执行 |
 | KDJ | — | 待开发 |
 | 布林带 | — | 待开发 |
-| RSI | — | 待开发 |
+
+### 新增自定义策略（插件式接入）
+
+1. 在 `strategy/technical/` 下新建策略文件，继承 `BaseStrategy`，实现 `name` 和 `on_bar() -> list[Signal]`
+2. 在 `strategy/registry.py` 的 `STRATEGY_REGISTRY` 中添加一条记录：
+
+```python
+"my_strategy": {
+    "class": "strategy.technical.my_strategy.MyStrategy",
+    "description": "我的策略",
+    "default_params": {"param1": 10},
+},
+```
+
+3. 即可通过 `--strategy my_strategy` 在回测和模拟盘中使用，无需修改其他代码。
+
+**`on_bar()` 信号的 `execute_at` 字段说明：**
+
+| execute_at | 含义 |
+|-----------|------|
+| `"next_open"`（默认）| 次日开盘价执行，适合趋势策略 |
+| `"open"` | 当日开盘价执行（模拟集合竞价挂单） |
+| `"close"` | 当日收盘价执行（模拟尾盘成交） |
 
 ## A股交易规则模拟
 
@@ -358,6 +390,8 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 - [x] Phase 1: 数据基础（采集 + 存储 + ETF 支持 + 增量更新）
 - [x] Phase 2: 回测引擎（撮合 + 规则 + 费用 + 绩效评估）
 - [x] 开盘做空回测策略（`run_limitdown_short.py`）
+- [x] 插件化策略框架（`strategy/registry.py`，新策略一处注册即可接入回测+模拟盘）
+- [x] 跌停做空策略接入模拟盘（`limitdown_short`，支持当日开盘/收盘执行）
 - [ ] Phase 3: 策略库扩展（KDJ、布林带、RSI、多因子）
 - [ ] Phase 4: 风控模块（仓位控制、止损止盈、黑名单）
 - [x] Phase 5: 模拟交易（`scripts/run_paper_trade.py`）
