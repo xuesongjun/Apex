@@ -37,6 +37,12 @@ strategies:
     overbought: 70
     oversold: 30
 
+  # 隔夜多头策略（尾盘买 / 次日开盘卖）
+  overnight_long:
+    enabled: true
+    min_drop_pct: null    # 当日跌幅阈值（正数百分比），null = 禁用
+    max_rise_pct: null    # 当日涨幅上限（正数百分比），null = 禁用
+
 # 股票池配置
 stock_pool:
   # 指数成分股（默认沪深300）

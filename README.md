@@ -124,6 +124,14 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --csv trades.csv
 ```
 
+```bash
+# 隔夜多头策略（尾盘买 / 次日集合竞价卖）
+python scripts/run_backtest.py --strategy overnight_long --codes 513090 --start 2023-01-01 --capital 500000
+
+# 启用涨跌幅过滤（跌幅 ≥ 3% 才买）
+python scripts/run_backtest.py --strategy overnight_long --codes 513090 --start 2023-01-01 --params min_drop_pct=3.0
+```
+
 ### 4. 开盘做空策略回测
 
 > 模拟"集合竞价挂跌停价卖出（实际以开盘价成交）+ 收盘前买入"的日内做空逻辑。若指定日期超出数据库范围，会自动提示补数据。
@@ -313,6 +321,9 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 600519 --ca
 # 跌停做空策略（开盘卖出 + 收盘买入，当日执行）
 python scripts/run_paper_trade.py --strategy limitdown_short --codes 513090 --capital 1000000
 
+# 隔夜多头策略（尾盘买 / 次日开盘卖）
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 --capital 1000000
+
 # 查看账户当前状态、持仓、待执行订单
 python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --status
 
@@ -357,6 +368,7 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 | `ma_cross` | 均线交叉 | 趋势跟踪，短均线金叉/死叉长均线，次日开盘执行 |
 | `macd` | MACD | 趋势动量，DIF/DEA 金叉死叉，次日开盘执行 |
 | `limitdown_short` | 跌停做空 | 每日开盘卖出（集合竞价）+ 收盘买入，当日执行 |
+| `overnight_long` | 隔夜多头 | 尾盘买入（14:55 近似收盘价）+ 次日集合竞价挂跌停价卖出（开盘成交） |
 | KDJ | — | 待开发 |
 | 布林带 | — | 待开发 |
 

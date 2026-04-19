@@ -375,10 +375,11 @@ class PaperEngine:
             if bar is None:
                 continue  # 停牌，不推送
             self.strategy._update_bar(bar)
-            signal = self.strategy.on_bar(bar)
-            if signal:
-                signals.append(signal)
-                logger.debug(f"信号：{signal.direction.value} {signal.code} 原因：{signal.reason}")
+            new_signals = self.strategy.on_bar(bar)
+            if new_signals:
+                signals.extend(new_signals)
+                for s in new_signals:
+                    logger.debug(f"信号：{s.direction.value} {s.code} 原因：{s.reason}")
         return signals
 
     # ── 步骤7：生成明日 pending 订单 ─────────────────────────────────────

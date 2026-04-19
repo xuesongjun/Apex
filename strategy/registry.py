@@ -28,6 +28,11 @@ STRATEGY_REGISTRY: dict[str, dict] = {
         "description": "跌停做空策略（集合竞价卖出 + 收盘买入）",
         "default_params": {},
     },
+    "overnight_long": {
+        "class": "strategy.technical.overnight_long.OvernightLongStrategy",
+        "description": "隔夜多头（尾盘买 / 次日开盘卖）",
+        "default_params": {"min_drop_pct": None, "max_rise_pct": None},
+    },
 }
 
 
