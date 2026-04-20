@@ -26,6 +26,26 @@ from data.models import init_db
 from strategy.registry import STRATEGY_REGISTRY, load_strategy
 
 
+# 交易明细列定义：英文 key → 中文表头 + 宽度 + 格式化函数
+# 同时供控制台表格渲染和 CSV 导出复用
+TRADE_COLUMNS = [
+    ("code",         "代码",       8,  lambda v: str(v)),
+    ("buy_date",     "买入日",     12, lambda v: str(v)),
+    ("sell_date",    "卖出日",     12, lambda v: str(v)),
+    ("buy_open",     "开盘价",     9,  lambda v: f"{float(v):.3f}"),
+    ("buy_price",    "买入价",     9,  lambda v: f"{float(v):.3f}"),
+    ("sell_close",   "收盘价",     9,  lambda v: f"{float(v):.3f}"),
+    ("sell_price",   "卖出价",     9,  lambda v: f"{float(v):.3f}"),
+    ("volume",       "份额",       10, lambda v: f"{int(v):,d}"),
+    ("commission",   "佣金",       9,  lambda v: f"{float(v):.2f}"),
+    ("profit",       "净盈",       12, lambda v: f"{float(v):+,.2f}"),
+    ("profit_pct",   "收益率%",    8,  lambda v: f"{float(v):+.2f}"),
+    ("holding_days", "持仓天数",   8,  lambda v: str(int(v))),
+    ("net_equity",   "净值",       14, lambda v: f"{float(v):,.2f}"),
+    ("reason",       "卖出原因",   38, lambda v: str(v)),
+]
+
+
 def parse_params(param_strings: list[str]) -> dict:
     """解析命令行参数字符串 'key=value' 为字典"""
     params = {}
@@ -161,7 +181,11 @@ def main():
         display_df = trades_df if args.show_all else trades_df.tail(20)
         _print_trades(display_df, len(result.trades))
         if args.csv:
-            trades_df.to_csv(args.csv, index=False, encoding="utf-8-sig")
+            # 按 TRADE_COLUMNS 顺序挑列并重命名为中文，保持与控制台一致
+            rename_map = {key: name for key, name, _, _ in TRADE_COLUMNS}
+            keep_keys = [key for key, *_ in TRADE_COLUMNS if key in trades_df.columns]
+            export_df = trades_df[keep_keys].rename(columns=rename_map)
+            export_df.to_csv(args.csv, index=False, encoding="utf-8-sig")
             print(f"\n[已导出] 全部 {len(trades_df)} 笔交易明细 → {args.csv}")
     else:
         print("无交易记录")
@@ -182,41 +206,35 @@ def _pad_str(s: str, width: int, align: str = ">") -> str:
 
 
 def _print_trades(df, total_count: int):
-    """格式化打印交易明细"""
+    """格式化打印交易明细（按 TRADE_COLUMNS 统一列定义渲染）"""
     show_count = len(df)
     if show_count == total_count:
         print(f"\n【交易明细】（全部 {total_count} 笔）")
     else:
         print(f"\n【交易明细】（显示最近 {show_count} 笔，共 {total_count} 笔）")
 
-    # 列定义: (表头, 宽度)
-    cols = [
-        ("代码", 8), ("买入日", 12), ("卖出日", 12), ("买入价", 9),
-        ("卖出价", 9), ("数量(股)", 10), ("盈亏", 12),
-        ("收益率%", 8), ("持仓天数", 8), ("卖出原因", 38),
-    ]
-
-    sep = "+" + "+".join("-" * w for _, w in cols) + "+"
-    header = "|" + "|".join(_pad_str(name, w, "^") for name, w in cols) + "|"
+    sep = "+" + "+".join("-" * w for _, _, w, _ in TRADE_COLUMNS) + "+"
+    header = "|" + "|".join(_pad_str(name, w, "^") for _, name, w, _ in TRADE_COLUMNS) + "|"
 
     print(sep)
     print(header)
     print(sep)
 
     for _, row in df.iterrows():
-        values = [
-            row.get("code", ""),
-            str(row.get("buy_date", "")),
-            str(row.get("sell_date", "")),
-            f"{row.get('buy_price', 0):.3f}",
-            f"{row.get('sell_price', 0):.3f}",
-            f"{row.get('volume', 0):,d}",
-            f"{row.get('profit', 0):+,.2f}",
-            f"{row.get('profit_pct', 0):+.2f}",
-            str(row.get("holding_days", 0)),
-            str(row.get("reason", "")),
-        ]
-        line = "|" + "|".join(_pad_str(val, w) for val, (_, w) in zip(values, cols)) + "|"
+        values = []
+        for key, _name, _w, fmt in TRADE_COLUMNS:
+            raw = row.get(key, "")
+            # 空值/None 容错：直接转空串，避免 fmt 对 None/NaN 抛错
+            if raw is None or (isinstance(raw, float) and raw != raw):
+                values.append("")
+            else:
+                try:
+                    values.append(fmt(raw))
+                except (ValueError, TypeError):
+                    values.append(str(raw))
+        line = "|" + "|".join(
+            _pad_str(val, w) for val, (_, _, w, _) in zip(values, TRADE_COLUMNS)
+        ) + "|"
         print(line)
 
     print(sep)

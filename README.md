@@ -124,6 +124,23 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --csv trades.csv
 ```
 
+**交易明细字段（14 列中文表头，UTF-8 BOM，Excel 可直接打开）：**
+
+| 列 | 含义 |
+|----|------|
+| 代码 / 买入日 / 卖出日 | 基础上下文 |
+| 开盘价 | 买入日开盘价（用于对比"尾盘买 vs 早盘买"择时成本） |
+| 买入价 | 买入成交价 |
+| 收盘价 | 卖出日收盘价（用于对比"开盘卖 vs 收盘卖"择时收益） |
+| 卖出价 | 卖出成交价 |
+| 份额 | 成交数量 |
+| 佣金 | 买入佣金 + 卖出佣金 合计（ETF 无印花税/过户费） |
+| 净盈 | `(卖出价 - 买入价) × 份额 - 佣金合计` |
+| 收益率% | `(卖出价 / 买入价 - 1) × 100`（未扣佣金的毛收益率） |
+| 持仓天数 | 卖出日 − 买入日 |
+| 净值 | 卖出后账户总资产（累计效果） |
+| 卖出原因 | 策略返回的 `reason` 字段 |
+
 ```bash
 # 隔夜多头策略（尾盘买 / 次日集合竞价卖）
 python scripts/run_backtest.py --strategy overnight_long --codes 513090 --start 2023-01-01 --capital 500000

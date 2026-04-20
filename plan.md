@@ -461,4 +461,54 @@ a-stock-trading-system/
 
 ---
 
-*文档版本：v1.0 | 创建日期：2026-03-17*
+## 9. 迭代日志
+
+### 2026-04-19 — 交易明细扩展 + profit 计算修正
+
+**目标**：让回测产出的交易明细包含用户要求的 11 个字段，同时修复引擎 `profit` 只扣单边佣金的 bug。
+
+**关联研究**：见 `research.md` → "2026-04-19 交易明细扩展 / profit 计算修正"
+
+**改动清单**：
+
+| 文件 | 改动 |
+|------|------|
+| `backtest/engine.py` | `_buy_records` 补 `commission` + `bar_open`；`_trades` 新增 `buy_open / sell_close / commission / net_equity`；修正 `profit` 扣两边佣金 |
+| `scripts/run_backtest.py` | `_print_trades` 重写为 14 列中文表头；CSV 导出前 rename 为中文列名 |
+| `research.md` | 新建，记录研究结论 |
+| `README.md` | 补充交易明细新格式说明 |
+| `process.txt` | 追加变更日志 |
+
+**不改动**：`backtest/account.py` / `backtest/fee.py` / `backtest/metrics.py` / 所有策略文件 / 配置文件。
+
+**输出字段设计**（中文表头，14 列）：
+
+```
+代码 | 买入日 | 卖出日 | 开盘价 | 买入价 | 收盘价 | 卖出价 | 份额 | 佣金 | 净盈 | 收益率% | 持仓天数 | 净值 | 卖出原因
+```
+
+- 开盘价 = 买入日 `bar.open`
+- 收盘价 = 卖出日 `bar.close`
+- 佣金 = 买入佣金 + 卖出佣金（ETF 无印花税/过户费，合并为单列）
+- 净盈 = `(卖出价-买入价)*份额 - 佣金合计`
+- 净值 = 卖出日 `account.equity_curve[date].total_equity`
+
+**费用模型确认**（无需代码改动）：
+
+- 万1费率：`settings.yaml:35 commission_rate: 0.0001` ✓
+- 免5最低：`settings.yaml:37 min_commission: 0.0` ✓
+- ETF 免印花税：`fee.py:57` + `account.py:82,147` 自动传 `is_etf` ✓
+- ETF 免过户费：`fee.py:62` ✓
+
+**验收标准**：
+
+1. 控制台和 CSV 明细均为 14 列中文表头
+2. `profit` 扣两边佣金后，与 `account.equity_curve` 每日资产差分一致
+3. 513090 场景下"印花税/过户费"= 0（已合入 commission 单列）
+4. `metrics` 指标（win_rate / avg_holding_days / sharpe 等）不变
+
+**执行顺序**：research.md → plan.md → **用户 GO** → engine 改动 → run_backtest 改动 → 回测验证 → README + process.txt 更新 → commit + push。
+
+---
+
+*文档版本：v1.1 | 创建日期：2026-03-17 | 最后更新：2026-04-19*

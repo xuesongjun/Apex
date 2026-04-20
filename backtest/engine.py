@@ -248,35 +248,47 @@ class BacktestEngine:
         if signal.direction == Direction.BUY:
             order = self.account.process_buy(order)
             if order.status == "filled":
-                # 记录买入
+                # 记录买入：补存 commission（用于卖出时计算净盈）+ 买入日开盘价
                 if signal.code not in self._buy_records:
                     self._buy_records[signal.code] = []
                 self._buy_records[signal.code].append({
                     "date": signal.trade_date,
                     "price": exec_price,
                     "volume": volume,
+                    "commission": order.commission,
+                    "bar_open": bar.open,
                 })
         else:
             # 计算卖出盈亏
             buy_info = self._buy_records.get(signal.code, [{}])
-            buy_price = buy_info[-1].get("price", 0) if buy_info else 0
-            buy_date = buy_info[-1].get("date", signal.trade_date) if buy_info else signal.trade_date
+            last_buy = buy_info[-1] if buy_info else {}
+            buy_price = last_buy.get("price", 0)
+            buy_date = last_buy.get("date", signal.trade_date)
+            buy_commission = last_buy.get("commission", 0.0)
+            buy_open = last_buy.get("bar_open", 0.0)
 
             order = self.account.process_sell(order)
             if order.status == "filled":
-                profit = (exec_price - buy_price) * volume - order.commission
+                sell_commission = order.commission
+                total_commission = round(buy_commission + sell_commission, 2)
+                # 修正：扣两边佣金（原逻辑只扣卖出端，导致 profit 偏乐观）
+                profit = (exec_price - buy_price) * volume - buy_commission - sell_commission
                 holding_days = (signal.trade_date - buy_date).days
                 self._trades.append({
                     "code": signal.code,
                     "direction": "SELL",
-                    "buy_price": buy_price,
-                    "sell_price": exec_price,
+                    "buy_date": buy_date,
+                    "sell_date": signal.trade_date,
+                    "buy_open": round(buy_open, 3),
+                    "buy_price": round(buy_price, 3),
+                    "sell_close": round(bar.close, 3),
+                    "sell_price": round(exec_price, 3),
                     "volume": volume,
+                    "commission": total_commission,
                     "profit": round(profit, 2),
                     "profit_pct": round((exec_price / buy_price - 1) * 100, 2) if buy_price > 0 else 0,
                     "holding_days": holding_days,
-                    "buy_date": buy_date,
-                    "sell_date": signal.trade_date,
+                    "net_equity": round(self.account.total_equity, 2),
                     "reason": signal.reason,
                 })
                 # 清除买入记录
