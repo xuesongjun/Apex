@@ -30,19 +30,20 @@ from strategy.registry import STRATEGY_REGISTRY, load_strategy
 # 同时供控制台表格渲染和 CSV 导出复用
 TRADE_COLUMNS = [
     ("code",         "代码",       8,  lambda v: str(v)),
-    ("buy_date",     "买入日",     12, lambda v: str(v)),
-    ("sell_date",    "卖出日",     12, lambda v: str(v)),
-    ("buy_open",     "开盘价",     9,  lambda v: f"{float(v):.3f}"),
+    ("trade_date",   "日期",       12, lambda v: str(v)),
+    ("action",       "动作",       6,  lambda v: str(v)),
+    ("open",         "开盘价",     9,  lambda v: f"{float(v):.3f}"),
     ("buy_price",    "买入价",     9,  lambda v: f"{float(v):.3f}"),
-    ("sell_close",   "收盘价",     9,  lambda v: f"{float(v):.3f}"),
+    ("close",        "收盘价",     9,  lambda v: f"{float(v):.3f}"),
     ("sell_price",   "卖出价",     9,  lambda v: f"{float(v):.3f}"),
-    ("volume",       "份额",       10, lambda v: f"{int(v):,d}"),
+    ("sell_volume",  "卖出份额",   10, lambda v: f"{int(v):,d}"),
+    ("buy_volume",   "买入份额",   10, lambda v: f"{int(v):,d}"),
     ("commission",   "佣金",       9,  lambda v: f"{float(v):.2f}"),
     ("profit",       "净盈",       12, lambda v: f"{float(v):+,.2f}"),
     ("profit_pct",   "收益率%",    8,  lambda v: f"{float(v):+.2f}"),
     ("holding_days", "持仓天数",   8,  lambda v: str(int(v))),
     ("net_equity",   "净值",       14, lambda v: f"{float(v):,.2f}"),
-    ("reason",       "卖出原因",   38, lambda v: str(v)),
+    ("reason",       "动作备注",   38, lambda v: str(v)),
 ]
 
 
@@ -192,7 +193,15 @@ def main():
             # 按 TRADE_COLUMNS 顺序挑列并重命名为中文，保持与控制台一致
             rename_map = {key: name for key, name, _, _ in TRADE_COLUMNS}
             keep_keys = [key for key, *_ in TRADE_COLUMNS if key in trades_df.columns]
-            export_df = trades_df[keep_keys].rename(columns=rename_map)
+            export_df = trades_df[keep_keys].copy()
+            # 整数列（volume/holding_days）pandas 遇 None 会升 float 输出 9000.0；
+            # 统一格式化为整数字符串或空串，避免 CSV 里出现 "9000.0"
+            for col in ("sell_volume", "buy_volume", "holding_days"):
+                if col in export_df.columns:
+                    export_df[col] = export_df[col].map(
+                        lambda v: "" if v is None or (isinstance(v, float) and v != v) else str(int(v))
+                    )
+            export_df = export_df.rename(columns=rename_map)
             export_df.to_csv(args.csv, index=False, encoding="utf-8-sig")
             print(f"\n[已导出] 全部 {len(trades_df)} 笔交易明细 → {args.csv}")
     else:
