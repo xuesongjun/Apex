@@ -122,6 +122,9 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 
 # 导出全部交易明细到 CSV
 python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --csv trades.csv
+
+# 覆盖滑点（百分比，单位：小数；0 表示无滑点，默认读 settings.yaml 的 slippage_rate）
+python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --slippage-rate 0.0005
 ```
 
 **交易明细字段（14 列中文表头，UTF-8 BOM，Excel 可直接打开）：**

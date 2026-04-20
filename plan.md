@@ -463,6 +463,27 @@ a-stock-trading-system/
 
 ## 9. 迭代日志
 
+### 2026-04-20 — 滑点模型：绝对值 → 百分比 + CLI 可配
+
+**目标**：修正 `slippage: 0.01`（绝对元）的两个设计缺陷——低价 ETF 摩擦过重、默认无法关闭。
+
+**关联研究**：见 `research.md` → "2026-04-20 滑点模型：绝对值 → 百分比 + CLI 可配"
+
+**核心改动**：
+
+| 文件 | 改动 |
+|------|------|
+| `config/settings.yaml` | `slippage: 0.01` → `slippage_rate: 0.0`（默认关闭） |
+| `config/__init__.py` | `BacktestConfig.slippage` → `BacktestConfig.slippage_rate` |
+| `backtest/engine.py` | 公式改 `exec_price × (1 ± slippage_rate)` + `round(3)`；`or` 改 `is not None` 防 falsy 坑；rate=0 时短路跳过 |
+| `scripts/run_backtest.py` | 新增 `--slippage-rate RATE`，`default=None` 区分"未传" vs "传 0" |
+
+**优先级**：`CLI --slippage-rate N  >  settings.yaml slippage_rate  >  代码兜底 0.0`
+
+**验证**：pytest 11/11 全绿；513090 冒烟回测 rate=0 时 buy_price=bar.close 精确匹配，rate=0.0005 时 1.741→1.742、1.728→1.727 符合 `round(raw × 1.0005, 3)`。
+
+---
+
 ### 2026-04-20 — overnight_long 切换为连续隔夜模式（模式 A → B）
 
 **目标**：修正 overnight_long 策略语义。原版实现"间隔一天持仓"（持仓率 50%），用户期望"每天都持仓过夜"（持仓率 100%），即每天 9:25 开盘卖 + 14:55 尾盘再买。

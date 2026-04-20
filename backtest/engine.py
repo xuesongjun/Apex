@@ -39,13 +39,16 @@ class BacktestEngine:
         start_date: date,
         end_date: date,
         initial_capital: float = None,
-        slippage: float = None,
+        slippage_rate: float = None,
     ):
         self.strategy = strategy
         self.stock_codes = stock_codes
         self.start_date = start_date
         self.end_date = end_date
-        self.slippage = slippage or BacktestConfig.slippage
+        # 滑点百分比：None → 回落到 yaml 默认；0 表示无滑点
+        self.slippage_rate = (
+            slippage_rate if slippage_rate is not None else BacktestConfig.slippage_rate
+        )
 
         capital = initial_capital or BacktestConfig.initial_capital
         self.account = Account(capital)
@@ -190,11 +193,13 @@ class BacktestEngine:
             # "open" 和 "next_open" 均以当日开盘价模拟
             exec_price = bar.open
 
-        # 加入滑点
-        if signal.direction == Direction.BUY:
-            exec_price += self.slippage
-        else:
-            exec_price -= self.slippage
+        # 加入滑点（百分比模型）：买入向上偏，卖出向下偏；slippage_rate=0 时无摩擦
+        if self.slippage_rate:
+            if signal.direction == Direction.BUY:
+                exec_price *= 1 + self.slippage_rate
+            else:
+                exec_price *= 1 - self.slippage_rate
+            exec_price = round(exec_price, 3)
         exec_price = max(exec_price, 0.01)
 
         # 确定交易量

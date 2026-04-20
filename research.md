@@ -4,6 +4,71 @@
 
 ---
 
+## 2026-04-20 滑点模型：绝对值 → 百分比 + CLI 可配
+
+### 背景
+
+用户在交易明细中发现 `买入价 2.242 ≠ 买入日 close 2.232` 的差异 0.010 元——恰好是 `settings.yaml` 里的 `slippage: 0.01`（绝对值）。该模型有两个设计缺陷：
+
+1. **绝对滑点在不同价位上的摩擦系数不一致**：2 元股的 0.01 元 = 50bp；200 元股的 0.01 元仅 0.5bp。策略跨品种回测时摩擦成本失真。
+2. **默认值强制施加**：用户没有选择"无滑点"的途径，且 0.01 的默认对低价 ETF（如 513090 in ~2元区间）明显偏高。
+
+### 新模型
+
+绝对值 → **百分比 × 基价**，buy 向上偏，sell 向下偏：
+
+```python
+if self.slippage_rate:
+    if signal.direction == Direction.BUY:
+        exec_price *= 1 + self.slippage_rate
+    else:
+        exec_price *= 1 - self.slippage_rate
+    exec_price = round(exec_price, 3)
+```
+
+- **`if self.slippage_rate:` 短路**：`slippage_rate=0` 时完全跳过，`exec_price` 保持原 bar 浮点精度（避免无意义的 round 损失）
+- **`round(..., 3)`**：A 股最小价位 0.001 元，与真实撮合一致
+- **默认值改为 `0.0`**：用户在 `settings.yaml` 或 CLI 显式设置才启用；避免"藏在默认值里的假设"影响策略判断
+
+### 配置路径（3 层覆盖优先级）
+
+```
+CLI --slippage-rate N  >  settings.yaml slippage_rate  >  代码兜底 0.0
+```
+
+CLI 参数用 `type=float, default=None` 让"未传" vs "传 0"可区分——传了 0 走 `BacktestEngine.slippage_rate=0`（真的无滑点），没传时 `None` 交给 `__init__` 读 yaml。
+
+### 与 `or` 的一个坑
+
+构造函数旧代码 `self.slippage = slippage or BacktestConfig.slippage`——若 `slippage=0` 会被 `or` 当 falsy 掉进 yaml 默认，永远关不掉滑点。新代码改为 `None` 显式判断：
+
+```python
+self.slippage_rate = (
+    slippage_rate if slippage_rate is not None else BacktestConfig.slippage_rate
+)
+```
+
+### 验证
+
+| 场景 | buy_price 预期 | sell_price 预期 |
+|------|---------------|----------------|
+| slippage_rate=0 | bar.close | bar.open |
+| slippage_rate=0.0005 | round(bar.close × 1.0005, 3) | round(bar.open × 0.9995, 3) |
+
+实测 513090 2026-04-01 bar.close=1.741 → 1.742（+0.0005）；2026-04-02 bar.open=1.728 → 1.727（-0.0005）。符合。
+
+### 影响面
+
+| 文件 | 改动 |
+|------|------|
+| `config/settings.yaml` | `slippage: 0.01` → `slippage_rate: 0.0` |
+| `config/__init__.py` | `BacktestConfig.slippage` → `BacktestConfig.slippage_rate` |
+| `backtest/engine.py` | 构造参数重命名 + 公式改乘法 + `if self.slippage_rate:` 短路 |
+| `scripts/run_backtest.py` | 新增 `--slippage-rate` CLI 参数 |
+| `README.md` / `plan.md` / `process.txt` | 同步文档 |
+
+---
+
 ## 2026-04-20 overnight_long 切换为连续隔夜模式（模式 A → B）
 
 ### 背景

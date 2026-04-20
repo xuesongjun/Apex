@@ -74,8 +74,8 @@ backtest:
   initial_capital: 1000000.0
   # 基准指数
   benchmark: "000300"  # 沪深300
-  # 滑点（元）
-  slippage: 0.01
+  # 滑点（百分比，例如 0.0005 = 万5）；0 表示无滑点
+  slippage_rate: 0.0
 
 # 日志配置
 logging:

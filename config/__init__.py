@@ -92,7 +92,7 @@ class BacktestConfig:
     _bt = _settings.get("backtest", {})
     initial_capital: float = _bt.get("initial_capital", 1000000.0)
     benchmark: str = _bt.get("benchmark", "000300")
-    slippage: float = _bt.get("slippage", 0.01)
+    slippage_rate: float = _bt.get("slippage_rate", 0.0)
 
 
 # ========== 策略配置 ==========

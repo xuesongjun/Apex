@@ -116,6 +116,13 @@ def main():
         metavar="FILE",
         help="导出全部交易明细到 CSV 文件，如 --csv result.csv",
     )
+    parser.add_argument(
+        "--slippage-rate",
+        type=float,
+        default=None,
+        metavar="RATE",
+        help="滑点百分比，如 0.0005 表示万5；0 表示无滑点；省略则使用 settings.yaml 默认",
+    )
     args = parser.parse_args()
 
     setup_logging()
@@ -144,6 +151,7 @@ def main():
         start_date=start_date,
         end_date=end_date,
         initial_capital=args.capital,
+        slippage_rate=args.slippage_rate,
     )
 
     # 检查每只股票的数据库日期范围
