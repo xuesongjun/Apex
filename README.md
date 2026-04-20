@@ -142,12 +142,22 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 | 卖出原因 | 策略返回的 `reason` 字段 |
 
 ```bash
-# 隔夜多头策略（尾盘买 / 次日集合竞价卖）
+# 隔夜多头策略（连续隔夜：每天 14:55 买 + 次日 9:25 卖 + 当日再买）
 python scripts/run_backtest.py --strategy overnight_long --codes 513090 --start 2023-01-01 --capital 500000
 
-# 启用涨跌幅过滤（跌幅 ≥ 3% 才买）
+# 启用涨跌幅过滤（跌幅 ≥ 3% 才买，只作用于 BUY 分支）
 python scripts/run_backtest.py --strategy overnight_long --codes 513090 --start 2023-01-01 --params min_drop_pct=3.0
+
+# 创业板/科创板 ETF 覆盖涨跌停幅度（默认 0.10，创业板 ETF 应传 0.20）
+python scripts/run_backtest.py --strategy overnight_long --codes 159915 --start 2023-01-01 --params limit_pct=0.20
 ```
+
+**策略语义**：
+
+- **正常日**：有持仓 + 非一字跌停 → 9:25 集合竞价挂跌停卖（开盘价成交）+ 14:55 尾盘满仓再买
+- **一字跌停**（`bar.open ≤ pre_close × (1 - limit_pct)`）→ SELL 挂不出，BUY 也跳过（资金被持仓占用），当日零交易
+- **T+1 冻结日** → 持仓尚未解冻，跳过 SELL 和 BUY
+- **过滤参数** `min_drop_pct` / `max_rise_pct` 仅作用于 BUY（进场条件），不影响 SELL（持仓出场）
 
 ### 4. 开盘做空策略回测
 
@@ -385,7 +395,7 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 | `ma_cross` | 均线交叉 | 趋势跟踪，短均线金叉/死叉长均线，次日开盘执行 |
 | `macd` | MACD | 趋势动量，DIF/DEA 金叉死叉，次日开盘执行 |
 | `limitdown_short` | 跌停做空 | 每日开盘卖出（集合竞价）+ 收盘买入，当日执行 |
-| `overnight_long` | 隔夜多头 | 尾盘买入（14:55 近似收盘价）+ 次日集合竞价挂跌停价卖出（开盘成交） |
+| `overnight_long` | 隔夜多头（连续） | 每日 14:55 尾盘满仓买入 + 次日 9:25 集合竞价挂跌停价卖出，持仓率 ~100%（一字跌停被套时当日零交易） |
 | KDJ | — | 待开发 |
 | 布林带 | — | 待开发 |
 

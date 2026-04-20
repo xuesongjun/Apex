@@ -4,6 +4,94 @@
 
 ---
 
+## 2026-04-20 overnight_long 切换为连续隔夜模式（模式 A → B）
+
+### 背景
+
+用户回测后发现交易间隔一天（01-05 买 / 01-06 卖 / **01-06 空仓** / 01-07 买），与真实"隔夜因子"策略语义不符。用户期望每天都持仓过夜：01-05 买 → 01-06 开盘卖 → **01-06 尾盘再买** → 01-07 开盘卖 → …
+
+### 原有逻辑（模式 A，间隔持仓）
+
+`strategy/technical/overnight_long.py:28-63` 用 `if / elif` 互斥结构：
+
+```python
+if pos and pos.available > 0:
+    → SELL @ next_open
+elif not has_position(...):
+    → BUY @ close
+```
+
+持仓状态下只走 SELL 分支，BUY 分支被 `elif` 跳过。即使当 bar 内 SELL 成交释放了资金，BUY 已不会再被评估。结果：持仓率 ~50%。
+
+### 新逻辑（模式 B，连续隔夜）
+
+核心改动：`if / elif` → **双独立 if**，再加一个"本 bar 即将清仓"的状态假设。
+
+```python
+has_sellable  = pos and pos.available > 0
+sell_blocked  = has_sellable and (bar.open <= limit_down_price + 1e-6)
+
+# 独立判断 1：挂卖单
+if has_sellable and not sell_blocked:
+    → SELL @ next_open
+
+# 独立判断 2：挂买单（空仓 OR 即将通过 SELL 清仓）
+currently_empty = pos is None or pos.volume == 0
+will_sell_all   = has_sellable and not sell_blocked
+if (currently_empty or will_sell_all) and 过滤通过:
+    → BUY @ close
+```
+
+### 一字跌停判定
+
+`BarData` 无 limit 字段，需自行算：
+
+```python
+limit_down_price = round(pre_close * (1 - limit_pct), 3)
+sell_blocked = bar.open <= limit_down_price + 1e-6
+```
+
+- **浮点容差 1e-6**：防止 `bar.open=2.0970001` 与 `limit_down=2.097` 的末位误差导致误判
+- **limit_pct 参数化**：默认 0.10（主板 / 跨境 ETF），创业板/科创板 ETF 传 0.20
+- 一字跌停时：SELL 阻塞（卖不出）+ BUY 阻塞（持仓占用资金），当日无任何信号
+
+### 一个漏网 bug（已修）
+
+首次实现里 `will_be_empty = (not has_sellable) or (...)` 把"没有可卖仓位"等同于"空仓"，漏了 **T+1 冻结日**（pos 存在但 available=0）这种"仓位仍在只是锁着"的状态。单测 `test_position_with_zero_available_skips_sell` 直接捕获了这个逻辑错误。
+
+修正为显式判空：`currently_empty = pos is None or pos.volume == 0`。
+
+### 涨跌幅过滤的语义变化
+
+**原（模式 A）**：过滤生效时整根 bar 跳过（return 前 BUY 分支尚未生成）
+
+**新（模式 B）**：过滤**只作用于 BUY 分支**。持仓状态下即使 BUY 被过滤挡住，SELL 仍会照常挂单。语义上"过滤是进场条件，不是持仓条件"——被套时依然按常规出场逻辑卖。
+
+### 撮合顺序依赖
+
+同一根 bar 策略返回 `[SELL, BUY]`，引擎按列表顺序处理：
+1. SELL @ open 执行 → 资金释放
+2. BUY @ close 执行 → 用释放的资金满仓买
+
+这个顺序依赖的前提是**上次迭代已修的 `_run_strategy` list-vs-single-Signal bug**（`trading/paper_engine.py` 和 `backtest/engine.py`）。如果那个 bug 还在，第二个信号会被吞掉。
+
+### 影响面
+
+| 文件 | 改动 |
+|------|------|
+| `strategy/technical/overnight_long.py` | 重写 `on_bar`，18 → 35 行 |
+| `config/strategies.yaml` | 新增 `limit_pct: 0.10` |
+| `tests/test_overnight_long.py` | 改 4 个断言 + 新增 3 个用例，共 11 个（原 8） |
+| 引擎 / 账户 / 交易明细输出 | **不改**（信号协议不变） |
+
+### 验收
+
+- 11 个单测全绿（其中 1 个发现了 currently_empty 的 bug，修后通过）
+- 513090 2026-01-01~2026-04-07 回测：64 笔交易，买卖日期连续（row N sell_date = row N+1 buy_date）
+- 交易数约为模式 A 的 2 倍（~50% vs ~100% 持仓率）
+
+---
+
 ## 2026-04-19 交易明细扩展 / profit 计算修正
 
 ### 背景

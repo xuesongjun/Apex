@@ -463,6 +463,38 @@ a-stock-trading-system/
 
 ## 9. 迭代日志
 
+### 2026-04-20 — overnight_long 切换为连续隔夜模式（模式 A → B）
+
+**目标**：修正 overnight_long 策略语义。原版实现"间隔一天持仓"（持仓率 50%），用户期望"每天都持仓过夜"（持仓率 100%），即每天 9:25 开盘卖 + 14:55 尾盘再买。
+
+**关联研究**：见 `research.md` → "2026-04-20 overnight_long 切换为连续隔夜模式"
+
+**核心改动**：
+
+| 文件 | 改动 |
+|------|------|
+| `strategy/technical/overnight_long.py` | `on_bar` 从 `if / elif` 改为双独立 `if`；新增 `limit_pct` 参数 + 一字跌停判定（浮点容差 1e-6） |
+| `config/strategies.yaml` | overnight_long 节新增 `limit_pct: 0.10` |
+| `tests/test_overnight_long.py` | 8 → 11 用例：改 4 个断言（held_position / min_drop / max_rise / two_day_cycle），新增 3 个（一字跌停阻塞 / 被套次日恢复 / limit_pct 参数） |
+| `research.md` / `plan.md` / `README.md` / `process.txt` / spec | 文档同步 |
+
+**不改动**：`backtest/engine.py` / `backtest/account.py` / 交易明细输出（信号协议不变，引擎/账户对策略透明）。
+
+**策略边界规则**：
+
+- **有持仓 + 正常 bar** → 生成 `[SELL @ next_open, BUY @ close]`，引擎按列表顺序撮合（先卖释放资金，后买满仓）
+- **有持仓 + 一字跌停**（`bar.open <= pre_close × (1 - limit_pct) + 1e-6`）→ SELL 阻塞，BUY 阻塞，当日零信号
+- **T+1 冻结日**（持仓存在但 `available = 0`）→ SELL 跳过，BUY 也跳过（仓位仍在，资金被占）
+- **涨跌幅过滤**（`min_drop_pct` / `max_rise_pct`）仅作用于 BUY 分支，SELL 不受影响
+
+**撮合顺序依赖**：同根 bar 返回 `[SELL, BUY]` 顺序关键，依赖上次迭代已修复的 list[Signal] 处理。
+
+**验收**：
+
+- 11 个单测全绿（其中 1 个测试揭示了 `currently_empty` 逻辑 bug，修正后通过）
+- 513090 2026-01-01~2026-04-07 回测：64 笔交易，买卖日连续（`row[N].sell_date == row[N+1].buy_date`）
+- 交易数约为模式 A 两倍（从 ~393 → ~780 笔全区间预估）
+
 ### 2026-04-19 — 交易明细扩展 + profit 计算修正
 
 **目标**：让回测产出的交易明细包含用户要求的 11 个字段，同时修复引擎 `profit` 只扣单边佣金的 bug。
