@@ -5,10 +5,10 @@ from scripts.run_paper_trade import build_account_id
 
 
 def test_build_account_id_is_stable_and_order_insensitive():
-    params = {"min_drop_pct": 3.0, "limit_pct": 0.15}
+    params = {"min_drop_pct": 3.0, "max_rise_pct": 2.0}
 
     a = build_account_id("overnight_long", ["513090", "159915"], params)
-    b = build_account_id("overnight_long", ["159915", "513090"], {"limit_pct": 0.15, "min_drop_pct": 3.0})
+    b = build_account_id("overnight_long", ["159915", "513090"], {"max_rise_pct": 2.0, "min_drop_pct": 3.0})
 
     assert a == b
 
