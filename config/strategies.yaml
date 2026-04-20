@@ -37,12 +37,11 @@ strategies:
     overbought: 70
     oversold: 30
 
-  # 隔夜多头策略（连续隔夜：每天尾盘买 + 次日开盘卖 + 当日再买）
+  # 隔夜多头策略（连续隔夜：T日尾盘买 + T+1日开盘卖）
   overnight_long:
     enabled: true
     min_drop_pct: null    # 当日跌幅阈值（正数百分比），null = 禁用
     max_rise_pct: null    # 当日涨幅上限（正数百分比），null = 禁用
-    limit_pct: 0.10       # 涨跌停幅度，主板/跨境 ETF=0.10，创业板/科创板 ETF=0.20
 
 # 股票池配置
 stock_pool:

@@ -2,6 +2,7 @@
 回测引擎
 核心模块：加载历史数据 → 按时间回放 → 驱动策略产生信号 → 撮合成交 → 记录结果
 """
+from collections import defaultdict
 from datetime import date, timedelta
 from typing import Optional
 
@@ -61,6 +62,8 @@ class BacktestEngine:
         self._buy_records: dict[str, list[dict]] = {}
         # 当日动作暂存：{code: {"buy": {...}, "sell": {...}}}；每日末尾聚合后清空
         self._daily_actions: dict[str, dict] = {}
+        # 次日开盘待执行信号：{execute_date: [Signal, ...]}
+        self._pending_next_open: dict[date, list[Signal]] = defaultdict(list)
 
     def run(self) -> "BacktestResult":
         """
@@ -97,10 +100,13 @@ class BacktestEngine:
             self.account.new_trading_day(td)
 
             bars_today = all_bars[td]
-            signals: list[Signal] = []
-
             # 构建当日 K 线字典（code → bar），price_map 顺带生成
             bar_map: dict[str, BarData] = {bar.code: bar for bar in bars_today}
+
+            # 先执行昨日收盘后预约的 next_open 信号（真正的次日开盘撮合）
+            self._execute_pending_next_open(td, bar_map)
+
+            signals: list[Signal] = []
             self.account.update_prices({code: bar.close for code, bar in bar_map.items()})
 
             # 同步账户状态给策略
@@ -115,14 +121,23 @@ class BacktestEngine:
                 self.strategy._update_bar(bar)
                 signals.extend(self.strategy.on_bar(bar))
 
-            # 处理信号（先卖后买，释放资金）
-            sell_signals = [s for s in signals if s.direction == Direction.SELL]
-            buy_signals = [s for s in signals if s.direction == Direction.BUY]
+            # 处理当日信号：
+            # - open / close：当日立即撮合
+            # - next_open：挂到下一交易日开盘
+            intraday_signals = [s for s in signals if s.execute_at in ("open", "close")]
+            next_open_signals = [s for s in signals if s.execute_at == "next_open"]
+
+            # 当日撮合仍按先卖后买，释放资金
+            sell_signals = [s for s in intraday_signals if s.direction == Direction.SELL]
+            buy_signals = [s for s in intraday_signals if s.direction == Direction.BUY]
 
             for signal in sell_signals:
                 self._process_signal(signal, bar_map)
             for signal in buy_signals:
                 self._process_signal(signal, bar_map)
+
+            next_td = trade_dates[i + 1] if i + 1 < len(trade_dates) else None
+            self._queue_next_open_signals(next_open_signals, next_td)
 
             # 记录当日资产
             self.account.record_equity(td)
@@ -146,6 +161,42 @@ class BacktestEngine:
         logger.info("回测完成!")
         logger.info("=" * 60)
         return result
+
+    def _execute_pending_next_open(self, td: date, bar_map: dict[str, BarData]):
+        """执行上一交易日预约到今天开盘的信号。"""
+        pending = self._pending_next_open.pop(td, [])
+        if not pending:
+            return
+
+        sell_signals = [s for s in pending if s.direction == Direction.SELL]
+        buy_signals = [s for s in pending if s.direction == Direction.BUY]
+        for signal in sell_signals:
+            self._process_signal(signal, bar_map, validate_at="open")
+        for signal in buy_signals:
+            self._process_signal(signal, bar_map, validate_at="open")
+
+    def _queue_next_open_signals(
+        self,
+        signals: list[Signal],
+        execute_date: Optional[date],
+    ):
+        """把 next_open 信号挂到下一交易日。"""
+        if execute_date is None:
+            return
+
+        for signal in signals:
+            self._pending_next_open[execute_date].append(
+                Signal(
+                    code=signal.code,
+                    direction=signal.direction,
+                    trade_date=execute_date,
+                    price=signal.price,
+                    volume=signal.volume,
+                    reason=signal.reason,
+                    confidence=signal.confidence,
+                    execute_at="open",
+                )
+            )
 
     def _load_data(self) -> dict[date, list[BarData]]:
         """
@@ -183,7 +234,12 @@ class BacktestEngine:
 
         return all_bars
 
-    def _process_signal(self, signal: Signal, bar_map: dict[str, BarData]):
+    def _process_signal(
+        self,
+        signal: Signal,
+        bar_map: dict[str, BarData],
+        validate_at: Optional[str] = None,
+    ):
         """处理交易信号：验证 → 撮合 → 成交"""
         bar = bar_map.get(signal.code)
         if bar is None:
@@ -228,19 +284,32 @@ class BacktestEngine:
         pos_available = pos.available if pos else 0
 
         # 验证订单合法性
-        valid, reason = TradingRules.validate_order(
-            Signal(
+        check_mode = validate_at or signal.execute_at
+        if check_mode == "open":
+            valid, reason = self._validate_open_order(
                 code=signal.code,
                 direction=signal.direction,
-                trade_date=signal.trade_date,
-                price=exec_price,
+                exec_price=exec_price,
                 volume=volume,
-            ),
-            bar,
-            self.account.cash,
-            pos_volume,
-            pos_available,
-        )
+                bar=bar,
+                available_cash=self.account.cash,
+                position_volume=pos_volume,
+                position_available=pos_available,
+            )
+        else:
+            valid, reason = TradingRules.validate_order(
+                Signal(
+                    code=signal.code,
+                    direction=signal.direction,
+                    trade_date=signal.trade_date,
+                    price=exec_price,
+                    volume=volume,
+                ),
+                bar,
+                self.account.cash,
+                pos_volume,
+                pos_available,
+            )
 
         if not valid:
             logger.debug(f"订单拒绝: {signal.code} {signal.direction.value} - {reason}")
@@ -297,6 +366,44 @@ class BacktestEngine:
 
         self._orders.append(order)
         self.strategy.on_order(order)
+
+    def _validate_open_order(
+        self,
+        code: str,
+        direction: Direction,
+        exec_price: float,
+        volume: int,
+        bar: BarData,
+        available_cash: float,
+        position_volume: int,
+        position_available: int,
+    ) -> tuple[bool, str]:
+        """按开盘撮合规则校验订单，避免把 open 订单错误套用到 close 涨跌停判定。"""
+        if bar.pre_close > 0:
+            up_limit, down_limit = TradingRules.calc_limit_prices(bar.pre_close, code)
+            if direction == Direction.BUY and exec_price >= up_limit:
+                return False, "开盘涨停，无法买入"
+            if direction == Direction.SELL and exec_price <= down_limit:
+                return False, "开盘跌停，无法卖出"
+
+        if direction == Direction.BUY:
+            rounded = TradingRules.round_volume(volume, Direction.BUY)
+            if rounded <= 0:
+                return False, f"买入数量不足最小交易单位（{TradingRules.MIN_TRADE_UNIT}股）"
+            cost = exec_price * rounded
+            if cost > available_cash:
+                return False, f"资金不足：需要 {cost:.2f}，可用 {available_cash:.2f}"
+            return True, "通过"
+
+        if position_volume <= 0:
+            return False, "无持仓可卖"
+        if position_available <= 0:
+            return False, "T+1 限制：今日买入的股票明日才可卖出"
+        if volume > position_available:
+            return False, f"卖出数量超出可用持仓：委托 {volume}，可用 {position_available}"
+        if not TradingRules.is_valid_sell_volume(volume, position_available):
+            return False, "卖出数量不合法：超过100股时必须为100的整数倍，除非一次性卖出全部零股"
+        return True, "通过"
 
     def _finalize_daily_trade(self, td: date, bar_map: dict[str, BarData]):
         """将当日暂存的买/卖动作聚合为 _trades 一行，按 code 分行"""
@@ -379,12 +486,14 @@ class BacktestEngine:
             benchmark_returns=benchmark_returns,
             total_commission=self.account.total_commission,
             total_tax=self.account.total_tax,
+            initial_capital=self.account.initial_capital,
         )
 
         return BacktestResult(
             strategy_name=self.strategy.name,
             start_date=self.start_date,
             end_date=self.end_date,
+            initial_capital=self.account.initial_capital,
             metrics=metrics,
             equity_curve=self.account.equity_curve,
             trades=self._trades,
@@ -400,6 +509,7 @@ class BacktestResult:
         strategy_name: str,
         start_date: date,
         end_date: date,
+        initial_capital: float,
         metrics: BacktestMetrics,
         equity_curve: list[dict],
         trades: list[dict],
@@ -408,6 +518,7 @@ class BacktestResult:
         self.strategy_name = strategy_name
         self.start_date = start_date
         self.end_date = end_date
+        self.initial_capital = initial_capital
         self.metrics = metrics
         self.equity_curve = equity_curve
         self.trades = trades
@@ -419,7 +530,7 @@ class BacktestResult:
 
         # 获取期末账户数据
         final = self.equity_curve[-1] if self.equity_curve else {}
-        initial_capital = self.equity_curve[0]["total_equity"] if self.equity_curve else 0
+        initial_capital = self.initial_capital
         final_equity = final.get("total_equity", 0)
         final_cash = final.get("cash", 0)
         final_market_value = final.get("market_value", 0)
@@ -483,6 +594,7 @@ class BacktestResult:
             strategy_name=strategy_name,
             start_date=date.today(),
             end_date=date.today(),
+            initial_capital=0.0,
             metrics=_empty_metrics(0, 0),
             equity_curve=[],
             trades=[],

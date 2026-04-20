@@ -546,6 +546,83 @@ a-stock-trading-system/
 - 513090 2026-01-01~2026-04-07 回测：64 笔交易，买卖日连续（`row[N].sell_date == row[N+1].buy_date`）
 - 交易数约为模式 A 两倍（从 ~393 → ~780 笔全区间预估）
 
+---
+
+### 2026-04-20 — overnight_long 全链路 bug 修复（时序 / 统计 / 配置）
+
+**目标**：把 `overnight_long` 修回用户确认的严格语义：
+
+- 回测：T 日 `close` 买入，T+1 日 `open` 卖出
+- 模拟盘：T 日 14:55 近似 `close` 买入，T+1 日集合竞价挂跌停价卖出，成交价等价于 `open`
+
+同时修复与该策略直接相关的高优先级基础设施 bug：`next_open` 语义、paper 执行链、策略配置注入、回测统计口径、paper 账户隔离、卖出整手规则。
+
+**关联研究**：见 `research.md` → "2026-04-20 overnight_long 全链路 bug 修复研究"
+
+**改动文件**：
+
+| 文件 | 改动 |
+|------|------|
+| `strategy/technical/overnight_long.py` | 重写 `on_bar`：从“持仓日返回 SELL+BUY”改为“空仓日返回 BUY@close + SELL@next_open，持仓日只返回 SELL@next_open” |
+| `backtest/engine.py` | 新增真正的 `next_open` pending 队列；次日开盘先执行 pending，再运行策略；回测结果显式携带 `initial_capital` |
+| `trading/paper_engine.py` | 修正 `next_open` 卖单量解析与创建逻辑，使“今日收盘买、明日开盘卖”在 paper 端闭环成立 |
+| `strategy/registry.py` | 合并 `config/strategies.yaml` 中对应策略默认参数（忽略 `enabled`） |
+| `backtest/metrics.py` | 适配 Daily P&L Journal schema，按“存在卖出闭环”统计交易次数/胜率/持仓天数；接收真实 `initial_capital` |
+| `scripts/run_paper_trade.py` | 生成稳定 `account_id`，让模拟盘账户按策略 / 参数 / 标的自动隔离 |
+| `backtest/rules.py` | 显式校验卖出数量合法性，修复“>100 股非整手部分卖出”被放行的问题 |
+| `data/sources/tushare_source.py` | 顺手修复深市指数代码错误拼成 `.SH` 的问题 |
+| `tests/test_overnight_long.py` | 更新策略单测断言为新语义 |
+| `tests/test_overnight_long_engines.py` | 覆盖 overnight_long 在 backtest/paper 的真实时序 |
+| `tests/test_paper_trade_helpers.py` | 锁定 account_id 的稳定性与隔离性 |
+| `tests/test_trading_rules.py` | 锁定卖出整手规则 |
+| `README.md` / `research.md` / `process.txt` | 文档与变更日志同步 |
+
+**影响评估**：
+
+1. **`overnight_long` 行为会变化**
+   - 旧版：依赖错误的回测 `next_open` 语义，模拟盘会跑偏
+   - 新版：回测与模拟盘统一到“今日尾盘买，明早开盘卖”
+
+2. **其它默认使用 `next_open` 的策略会被一并修正**
+   - `ma_cross`
+   - `macd`
+   这是正向修复：原实现存在 lookahead bias，修复后会变成真正“次日开盘成交”
+
+3. **回测摘要数字会变化**
+   - `total_trades` / `win_rate` / `avg_holding_days` 会从错误值修为真实值
+   - `初始资金` / `总收益率` / `总盈亏` 会去掉首日手续费污染
+
+4. **模拟盘账户将自动隔离**
+   - 相同策略 key 但不同 `--params` / `--codes` 会生成不同账户
+   - `--status` / `--history` 需用与运行时相同的策略 / 参数 / 标的组合查询
+
+**不改动**：
+
+- 费用模型费率本身（`backtest/fee.py`）
+- `limitdown_short` 的理论回测模型
+- API / risk 占位模块
+
+**执行顺序**：
+
+1. 先修 `load_strategy()`，让 `strategies.yaml` 真正生效
+2. 重构 `overnight_long` 信号语义
+3. 修回测引擎 `next_open` 为真正跨日执行
+4. 修 paper engine 的 pending 创建与量解析
+5. 修 paper 账户隔离与卖出整手规则
+6. 修 metrics / summary
+7. 补集成测试并跑 `pytest`
+8. 更新 README / process.txt
+
+**验收标准**：
+
+1. `load_strategy('overnight_long').config` 默认包含 `strategies.yaml` 中的参数
+2. backtest 中 `overnight_long` 首日为 `BUY@close`，次日卖价精确取次日 `open`
+3. paper 中 Day1 运行后有 1 笔 `BUY@close` + 1 笔 Day2 `pending SELL`；Day2 运行后该卖单成交且可再次生成 Day3 卖单
+4. 回测摘要中的 `total_trades` 不再恒为 0
+5. 模拟盘账户 ID 对相同策略/参数/标的稳定，对不同参数或标的不同
+6. 非法部分 odd-lot 卖单会被拒绝，整手卖出与“一次性卖出全部零股”仍允许
+7. pytest 全绿
+
 ### 2026-04-19 — 交易明细扩展 + profit 计算修正
 
 **目标**：让回测产出的交易明细包含用户要求的 11 个字段，同时修复引擎 `profit` 只扣单边佣金的 bug。

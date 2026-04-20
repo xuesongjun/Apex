@@ -4,6 +4,202 @@
 
 ---
 
+## 2026-04-20 overnight_long 全链路 bug 修复研究
+
+### 用户目标语义（明确口径）
+
+用户确认的目标不是“信号层面大致类似”，而是严格的交易时序：
+
+1. **回测**
+   - T 日按 `close` 买入
+   - T+1 日按 `open` 卖出
+
+2. **实战 / 模拟盘**
+   - T 日 14:55 买入，近似 `close`
+   - T+1 日集合竞价挂跌停价卖出，成交价等价于 `open`
+
+因此，系统必须支持“**收盘建仓 -> 次日开盘平仓**”这个跨日时序，不能再依赖当前实现里对 `next_open` 的“同 bar 开盘价立即成交”近似。
+
+### 核心问题 1：回测引擎的 `next_open` 语义错误
+
+当前 `backtest/engine.py` 中，策略在处理当天 bar 后立即处理信号：
+
+- `execute_at="close"` → 当前 bar `close`
+- 其余（含 `next_open`）→ 当前 bar `open`
+
+这意味着 `next_open` 并没有被挂到下一交易日执行，而是被错误地在**当前 bar**用 `open` 成交。对多数“当日收盘出信号、次日开盘成交”的策略，这会产生标准的 lookahead bias。
+
+`overnight_long` 之所以“看起来大致正确”，只是因为它当前在 **T+1 bar** 上生成 `SELL @ next_open`，引擎又把这个信号落在同一根 **T+1 bar.open** 成交，结果碰巧接近了用户想要的卖出价。但这不是一个可复用、可证明正确的机制。
+
+### 核心问题 2：`overnight_long` 的当前信号设计依赖了上述错误语义
+
+当前 `strategy/technical/overnight_long.py` 在“有可卖仓位且非一字跌停”时返回：
+
+- `SELL @ next_open`
+- `BUY @ close`
+
+这是建立在“同一根 bar 上既能看到今天的收盘，又能把 `next_open` 直接落到今天开盘”这个错误机制上的。
+
+若把 `next_open` 修正为真正跨日挂单，当前策略会变成：
+
+- 今天持仓未卖出
+- 今天收盘又买入
+- 明天开盘才卖
+
+即仓位被重复累加，模拟盘更会直接跑偏。
+
+### 正确的 `overnight_long` 策略语义
+
+在“收盘后统一运行”的引擎模型下，`overnight_long` 的日终信号应改为：
+
+1. **若今日收盘后将持有隔夜仓位**
+   - 生成 `SELL @ next_open`（给明早）
+
+2. **若当前收盘时为空仓且买入过滤通过**
+   - 生成 `BUY @ close`（今天尾盘）
+
+换句话说，空仓日应返回 **`[BUY @ close, SELL @ next_open]`**，而不是当前的“有仓日返回 `[SELL @ next_open, BUY @ close]`”。
+
+这样才能在 paper/backtest 两端都满足：
+
+- Day T 收盘买入
+- Day T+1 开盘卖出
+- Day T+1 收盘再次买入
+
+### 核心问题 3：paper engine 与 `overnight_long` 当前严重不一致
+
+`trading/paper_engine.py` 的执行顺序是：
+
+1. 执行昨日 pending（今日开盘）
+2. 当日收盘后运行策略
+3. 当日执行 `open/close`
+4. 为明天创建 `next_open` pending
+
+在这个真实跨日模型下，当前 `overnight_long` 返回的 `SELL @ next_open + BUY @ close` 会导致：
+
+- 当日先买
+- 卖单推迟到明天
+- 甚至因为挂单量按 `available` 解析，卖不掉当日刚买的仓位
+
+这是本次修复的最高优先级 bug。
+
+### 核心问题 4：策略配置文件未实际生效
+
+`config/strategies.yaml` 虽被加载到 `config.STRATEGY_CONFIG`，但 `strategy/registry.py:load_strategy()` 并未合并该配置，只用了注册表硬编码默认值 + CLI `--params`。
+
+这导致：
+
+- `overnight_long.limit_pct` 在无 CLI 覆盖时不会进入实例配置
+- README 中“编辑 `config/strategies.yaml`”的描述与实际行为不一致
+
+### 核心问题 5：回测统计口径在交易明细重构后失真
+
+交易明细从 round-trip schema 改成 Daily P&L Journal 后，`backtest/engine.py` 写入的是：
+
+- `action`
+- `sell_price`
+- `buy_price`
+- `profit`
+
+不再写入原先的 `direction`
+
+但 `backtest/metrics.py` 仍按 `t.get("direction") == "SELL"` 识别成交闭环，导致：
+
+- `total_trades`
+- `win_rate`
+- `profit_loss_ratio`
+- `avg_holding_days`
+
+在当前版本下都可能退化为 0 或明显失真。
+
+### 核心问题 6：回测初始资金口径被第一天手续费污染
+
+`BacktestResult.print_summary()` 和 `calculate_metrics()` 都把 `equity_curve[0]["total_equity"]` 当作“初始资金”。但 `equity_curve` 的第一条记录是在**首个交易日成交之后**才写入的。
+
+对 `overnight_long` 这类首日大概率会买入的策略，首日手续费会让第一条净值低于真实初始资金，从而污染：
+
+- 初始资金展示
+- 总收益率
+- 年化收益率
+- 总盈亏
+
+### 核心问题 7：模拟盘账户未按参数 / 标的隔离
+
+`run_paper_trade.py` 和 `trading/paper_engine.py` 之前都默认把 `strategy.name` 当作模拟盘账户主键。
+
+这会导致：
+
+- 同一策略不同参数共享同一账户
+- 同一策略不同股票池共享同一账户
+- `--status` / `--history` 查到的账户可能不是当前实验那一套
+
+对 `overnight_long` 这种 `name` 固定为 `"overnight_long"` 的策略尤其危险，多次试验会出现“串仓 / 串挂单 / 串净值”。
+
+### 核心问题 8：卖出整手规则实现与注释不一致
+
+`TradingRules.round_volume()` 的注释写的是：
+
+- 卖出可以不足 100 股一次性卖出
+- 超过 100 股的部分必须为 100 的整数倍
+
+但实现实际上对卖出直接 `return volume`，没有任何校验。
+
+这意味着以下非法卖单会被错误放行：
+
+- 持仓 350 股，只卖 250 股
+- 持仓 900 股，只卖 550 股
+
+而这些都不符合注释声明的交易规则。
+
+### 核心问题 9：Tushare 深市指数代码后缀错误
+
+`data/sources/tushare_source.py` 在获取指数数据时，把所有指数都拼成 `.SH`。
+
+因此若 AKShare 失败、系统回退到 Tushare：
+
+- `399001`
+- `399006`
+
+这类深市指数会被错误查询为上交所代码。
+
+### 修复策略
+
+本次修复按以下顺序落地：
+
+1. **先修执行时序**
+   - backtest 引入真正的 `next_open` pending 队列
+   - paper 保留 pending 模型，但修正卖单量解析与 `overnight_long` 信号语义
+
+2. **再修策略语义**
+   - `overnight_long` 改为“空仓日返回 `BUY @ close + SELL @ next_open`”
+   - “持仓日”只负责为明早挂卖单，不再同日追加 `BUY @ close`
+
+3. **最后修统计与配置**
+   - `load_strategy()` 合并 `strategies.yaml`
+   - metrics 改为按“有卖出闭环”的 daily journal 识别交易
+   - metrics/summary 显式使用真实 `initial_capital`
+   - paper 账户实例按“策略 key + 参数 + 标的”稳定隔离
+   - 卖出整手规则显式校验，不再默认放行
+
+### 预期影响面
+
+| 文件 | 改动 |
+|------|------|
+| `strategy/technical/overnight_long.py` | 重写 `on_bar` 信号语义 |
+| `backtest/engine.py` | 引入 `next_open` pending 跨日执行；修正 summary 初始资金 |
+| `trading/paper_engine.py` | 修正 `next_open` 挂单量解析与 `overnight_long` 执行时序 |
+| `strategy/registry.py` | 合并 `config/strategies.yaml` 默认参数 |
+| `backtest/metrics.py` | 适配 daily journal 交易统计口径；接收真实初始资金 |
+| `scripts/run_paper_trade.py` | 生成稳定 `account_id`，让 paper 账户按参数 / 标的隔离 |
+| `backtest/rules.py` | 显式实现卖出数量合法性校验 |
+| `data/sources/tushare_source.py` | 修复深市指数 `.SZ` / `.SH` 后缀 |
+| `tests/test_overnight_long.py` | 更新策略单测断言 |
+| `tests/test_paper_trade_helpers.py` | 锁定 paper 账户 ID 的稳定性与隔离性 |
+| `tests/test_trading_rules.py` | 锁定卖出整手规则 |
+| `tests/` 新增集成测试 | 覆盖 overnight_long 在 backtest/paper 的真实时序 |
+
+---
+
 ## 2026-04-20 交易明细重构：round-trip 视角 → 每日视角（Daily P&L Journal）
 
 ### 背景

@@ -7,6 +7,7 @@
 import importlib
 from typing import Optional
 
+from config import STRATEGY_CONFIG
 from strategy.base import BaseStrategy
 
 # ── 策略注册表 ────────────────────────────────────────────────────────────────
@@ -59,7 +60,12 @@ def load_strategy(name: str, params: Optional[dict] = None) -> BaseStrategy:
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name)
 
-    config = {**info["default_params"], **(params or {})}
+    yaml_defaults = {
+        k: v
+        for k, v in STRATEGY_CONFIG.get(name, {}).items()
+        if k != "enabled"
+    }
+    config = {**info["default_params"], **yaml_defaults, **(params or {})}
     return cls(config)
 
 
