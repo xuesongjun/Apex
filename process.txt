@@ -1,6 +1,6 @@
-[2026-04-23 11:45] chore 配置 PR/Push 自动化 CI
-- 改动文件：.github/workflows/ci.yml, requirements-ci.txt, process.txt
-- 改动说明：为后续 PR / Push 引入最小可用的 GitHub Actions 自动化测试。新增 `backend-tests` 和 `frontend-build` 两个 job：后端使用 Python 3.11 安装 `requirements-ci.txt` 后执行 `pytest -q`，前端使用 Node 20 执行 `npm ci && npm run build`。同时新增 `requirements-ci.txt`，只保留当前测试与基础运行所需依赖，避免把 `ta-lib` / `pandas-ta` 这类当前未被测试链使用、但可能导致原生编译失败的包引入 CI，优先保证自动化回归链稳定。该 CI 方案可直接用于未来的 PR 质量门禁，后续若增加 API/前端测试，可继续在现有 workflow 上扩展。
+[2026-04-23 11:45] chore 配置 PR/Push 自动化 CI 并完成依赖分层
+- 改动文件：.github/workflows/ci.yml, requirements.txt, requirements-dev.txt, requirements-strategy.txt, process.txt
+- 改动说明：为后续 PR / Push 引入最小可用的 GitHub Actions 自动化测试，同时直接消除此前遗留的 `requirements-ci.txt` 过渡方案。新增 `backend-tests` 和 `frontend-build` 两个 job：后端使用 Python 3.11 安装 `requirements-dev.txt` 后执行 `pytest -q`，前端使用 Node 20 执行 `npm ci && npm run build`。依赖体系正式调整为三层：`requirements.txt` 作为基础运行依赖，`requirements-dev.txt` 用于开发/测试，`requirements-strategy.txt` 收纳 `ta-lib` / `pandas-ta` 这类当前仓库未实际引用、但未来策略扩展可能使用的重型依赖。这样既保持主 CI 稳定，又把技术债真正清掉，避免以后忘记处理。
 
 [2026-04-23 11:20] feat 启动 Phase 7A 实盘交易基座（broker 抽象 + dry-run 执行链）
 - 改动文件：config/settings.yaml, config/__init__.py, data/models.py, data/storage/repository.py, trading/broker/__init__.py, trading/broker/base.py, trading/broker/dry_run.py, trading/broker/qmt_broker.py, trading/live_engine.py, scripts/run_live_trade.py, README.md, research.md, plan.md, tests/test_live_trade.py
