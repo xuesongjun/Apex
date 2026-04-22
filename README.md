@@ -688,6 +688,114 @@ npm run dev
 - 暂未实现 WebSocket，页面数据默认通过 REST 获取
 - 风控中心、回测中心完整页面、实时行情页仍未开始
 
+## Phase 7A 实盘交易基座
+
+当前已落地 **Phase 7A：实盘交易基座**，但这不是“真实券商已接通”的完成态，而是先把：
+
+`策略信号 -> 统一订单请求 -> broker adapter -> 订单结果落库`
+
+这条链路搭起来。
+
+### 当前能力
+
+- 统一 broker 抽象：
+  - `trading/broker/base.py`
+- Dry-run broker：
+  - `trading/broker/dry_run.py`
+- QMT 适配器占位：
+  - `trading/broker/qmt_broker.py`
+- 实盘执行引擎骨架：
+  - `trading/live_engine.py`
+- 实盘/准实盘持久化表：
+  - `live_account`
+  - `live_position`
+  - `live_order`
+- 实盘 CLI：
+  - `scripts/run_live_trade.py`
+
+### 当前限制
+
+- 默认只支持 `dry_run` 模式
+- `QmtBroker` 目前只是占位壳，还没有真实联调
+- DryRunBroker 会把订单请求落库，但**不会模拟真实成交**
+- 因此当前更适合验证：
+  - 信号是否正确翻译成统一订单请求
+  - live engine 与 broker 抽象是否合理
+  - 后续真实券商适配是否能平滑接入
+
+### broker 配置
+
+编辑 `config/settings.yaml`：
+
+```yaml
+broker:
+  mode: "dry_run"      # dry_run / live
+  provider: "qmt"      # qmt / miniqmt / dummy
+  account_id: ""
+  endpoint: ""
+  timeout: 5
+```
+
+说明：
+
+- `mode`：
+  - `dry_run`：当前推荐，安全验证执行链
+  - `live`：预留给后续真实券商接入
+- `provider`：
+  - 当前仅 `dry_run` 真正可用
+  - `qmt` 只是预留接口方向
+
+### CLI 用法
+
+`scripts/run_live_trade.py` 用于运行实盘交易基座。
+
+**参数说明：**
+
+| 参数 | 含义 |
+|------|------|
+| `--strategy NAME` | 策略名称 |
+| `--codes CODE [CODE ...]` | 股票代码列表 |
+| `--capital N` | 初始资金（仅 dry-run 首次建账户时生效） |
+| `--date YYYY-MM-DD` | 指定运行日期，默认今天 |
+| `--params key=value ...` | 覆盖策略参数 |
+| `--mode dry_run|live` | broker 模式，默认读 `settings.yaml` |
+| `--provider NAME` | broker 提供方，默认读 `settings.yaml` |
+
+### 推荐使用方式（当前阶段）
+
+```bash
+# 1. 确保数据库中已有行情
+python scripts/init_db.py --codes 513090 --start 2023-01-01
+
+# 2. dry-run 跑一次实盘基座
+python scripts/run_live_trade.py --strategy overnight_long --codes 513090 --capital 1000000
+```
+
+示例输出会包含：
+
+- 实例ID
+- broker 类型
+- 生成信号数
+- 构建订单数
+- 提交成功/失败数
+
+### dry-run 的意义
+
+当前 `dry_run` 模式不会直接接真实券商，也不会模拟成交回报；它的作用是：
+
+1. 验证策略信号到订单请求的翻译是否正确
+2. 验证订单生命周期能否统一落库
+3. 为后续 `QmtBroker` 真实实现提供稳定接口目标
+
+### 下一阶段（Phase 7B）
+
+后续接真实券商时，原则是：
+
+- 不重写 `live_engine`
+- 只实现真实 broker adapter
+- 先接账户查询 / 持仓查询 / 下单 / 撤单
+- 再逐步补成交回报、对账、风控联动、通知
+
 ## 免责声明
 
 本项目仅供学习和研究使用。量化交易存在风险，策略的历史回测表现不代表未来收益。请勿将本系统直接用于实盘交易而不经过充分验证。投资有风险，入市需谨慎。

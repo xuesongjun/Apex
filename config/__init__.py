@@ -95,6 +95,16 @@ class BacktestConfig:
     slippage_rate: float = _bt.get("slippage_rate", 0.0)
 
 
+# ========== Broker 配置 ==========
+class BrokerConfig:
+    _br = _settings.get("broker", {})
+    mode: str = _br.get("mode", "dry_run")
+    provider: str = _br.get("provider", "qmt")
+    account_id: str = _br.get("account_id", "")
+    endpoint: str = _br.get("endpoint", "")
+    timeout: int = _br.get("timeout", 5)
+
+
 # ========== 策略配置 ==========
 STRATEGY_CONFIG = _strategies.get("strategies", {})
 STOCK_POOL_CONFIG = _strategies.get("stock_pool", {})

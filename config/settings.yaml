@@ -77,6 +77,14 @@ backtest:
   # 滑点（百分比，例如 0.0005 = 万5）；0 表示无滑点
   slippage_rate: 0.0
 
+# 券商 / 实盘执行配置
+broker:
+  mode: "dry_run"      # dry_run / live
+  provider: "qmt"      # qmt / miniqmt / dummy
+  account_id: ""       # 券商账户ID（可为空，后续本地配置覆盖）
+  endpoint: ""         # 预留给远程网关或本地桥接服务
+  timeout: 5           # 秒
+
 # 日志配置
 logging:
   level: "INFO"

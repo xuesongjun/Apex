@@ -4,6 +4,142 @@
 
 ---
 
+## 2026-04-23 Phase 7（实盘交易基座）启动研究
+
+### 当前代码现状
+
+仓库中与交易执行直接相关的能力目前只有：
+
+- `trading/paper_engine.py`：模拟盘每日引擎
+- `trading/paper_account.py`：模拟盘持久化账户
+- `data/models.py` / `data/storage/repository.py`：`paper_account / paper_position / paper_order / paper_nav`
+
+当前缺失：
+
+- `trading/broker/` 为空，没有真实 broker 适配层
+- 没有统一的“实盘订单请求 / 券商订单状态 / 券商持仓 / 券商账户”抽象
+- 没有 `live_engine` / `executor` 这种把策略信号翻译成券商委托的基座
+- 没有 dry-run / live 切换机制
+- 没有实盘订单持久化表
+- 风控模块还未实现，因此 Phase 7 第一阶段不能假设有完整风控可复用
+
+### 结论：Phase 7 第一阶段必须先做“基座”，不能直接做完整实盘
+
+现阶段如果直接做：
+
+- QMT 下单
+- 券商账户同步
+- 实盘持仓管理
+- 风控联动
+
+会把 broker 细节、通知、风控、订单生命周期全部耦在一起，后面很难维护。
+
+因此 Phase 7 第一阶段应只做 **实盘交易基座**，目标是把“策略信号 -> 统一订单请求 -> broker 适配器 -> 订单回报 / 状态持久化”这条链打通。
+
+### 推荐的第一阶段范围（Phase 7A）
+
+1. **统一 broker 抽象层**
+   - `BaseBroker`
+   - `BrokerAccount`
+   - `BrokerPosition`
+   - `BrokerOrder`
+   - `BrokerOrderRequest`
+
+2. **实盘执行引擎骨架**
+   - 新增 `trading/live_engine.py`
+   - 职责：
+     - 加载策略
+     - 读取账户/持仓
+     - 生成统一委托请求
+     - 调用 broker 下单
+     - 记录结果
+
+3. **dry-run broker**
+   - 第一阶段先做一个 `DryRunBroker`
+   - 不连真实券商
+   - 只把委托请求落库 / 打日志 / 发送通知
+   - 用它验证基座结构是否合理
+
+4. **QMT/miniQMT 适配器占位**
+   - 新增 `QmtBroker` 桩实现或最小接口壳
+   - 明确 TODO，不在第一阶段硬接真实客户端
+
+5. **实盘订单持久化**
+   - 新增真实交易相关表，至少包括：
+     - `live_account`
+     - `live_order`
+     - `live_fill`（如本阶段不做可先留后续）
+
+6. **通知挂点**
+   - 只挂邮件接口位置
+   - 第一阶段不把完整邮件系统做完
+
+### 为什么先做 DryRunBroker
+
+因为你还没有最终确认真实券商接口细节（QMT / miniQMT / 其他），而且当前环境也不适合直接联真实交易端。
+
+DryRunBroker 的价值：
+
+- 验证实盘基座结构
+- 不引入真实资金风险
+- 给后续 QMT 适配器一个明确接口目标
+- 可先通过 CLI / API / Web 面板查看“准备下什么单”
+
+### 推荐的代码结构
+
+建议第一阶段新增或扩展：
+
+- `trading/broker/base.py`
+- `trading/broker/dry_run.py`
+- `trading/broker/qmt_broker.py`（占位）
+- `trading/live_engine.py`
+- `trading/models.py`（若不放到 `data/models.py`）
+- `scripts/run_live_trade.py`
+
+若继续沿用现有 ORM 风格，也可以把 live 表直接加到 `data/models.py`。
+
+### 配置建议
+
+`config/settings.yaml` 新增：
+
+```yaml
+broker:
+  mode: "dry_run"   # dry_run / live
+  provider: "qmt"   # qmt / miniqmt / dummy
+  account_id: ""
+  endpoint: ""
+  timeout: 5
+```
+
+说明：
+
+- `mode` 用于全局切换 dry-run 与 live
+- `provider` 指定 broker 适配器
+- 凭据类内容不要直接硬编码到仓库里，建议后续走本地配置或环境变量
+
+### 第一阶段不做的内容
+
+- 不直接接真实资金下单
+- 不做完整成交回报同步
+- 不做复杂风控联动
+- 不做持仓对账自动修复
+- 不做 GUI/可视化的实盘交易台
+
+### 验收标准（Phase 7A）
+
+1. 有统一 broker 抽象接口
+2. 有 `DryRunBroker`
+3. 有 `run_live_trade.py` 或等价 CLI
+4. 策略信号可被翻译成统一订单请求并通过 DryRunBroker 执行
+5. 订单结果能落库并可查询
+6. 后续接 QMT 时无需重写 live engine，只需实现 broker adapter
+
+### 风险提示
+
+Phase 7 一旦进入真实券商对接，就是高风险区域。第一阶段一定要把目标限定在“基座 + dry-run”，不要把“真实下单成功”作为首要目标。
+
+---
+
 ## 2026-04-20 Phase 6（Web 可视化）启动研究
 
 ### 当前代码基础

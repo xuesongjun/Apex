@@ -550,6 +550,74 @@ a-stock-trading-system/
 
 ## 9. 迭代日志
 
+### 2026-04-23 — Phase 7（实盘交易基座）启动计划
+
+**目标**：启动 Phase 7，但第一阶段只做“实盘交易基座”，不直接进入真实券商下单。
+
+**关联研究**：见 `research.md` → "2026-04-23 Phase 7（实盘交易基座）启动研究"
+
+**当前判断**：
+
+- `trading/broker/` 为空，缺少统一 broker 适配层
+- 当前只有 paper 链路，没有 live 链路
+- `risk/` 尚未落地，因此 Phase 7A 不能依赖完整风控模块
+- 真实券商（QMT / miniQMT）细节尚未最终确定，先做 dry-run 基座更稳
+
+**本轮建议范围（待你确认后执行）**：
+
+| 模块 | 范围 |
+|------|------|
+| Broker 抽象 | 定义统一 broker 接口与数据结构 |
+| Live Engine | 新增实盘执行引擎骨架 |
+| DryRun | 提供 `DryRunBroker` 作为 Phase 7A 默认执行器 |
+| 数据持久化 | 新增 live 账户 / 订单等最小表结构 |
+| CLI | 新增 `scripts/run_live_trade.py` |
+| 配置 | 在 `settings.yaml` 新增 broker 段 |
+
+**拟改动文件**：
+
+| 文件 | 改动 |
+|------|------|
+| `trading/broker/base.py` | 新增统一 broker 抽象 |
+| `trading/broker/dry_run.py` | 新增 DryRunBroker |
+| `trading/broker/qmt_broker.py` | 新增 QMT 适配器占位或最小壳 |
+| `trading/live_engine.py` | 新增实盘执行引擎骨架 |
+| `data/models.py` | 新增 live 账户 / 订单表 |
+| `data/storage/repository.py` | 新增 live 表 CRUD |
+| `config/settings.yaml` | 新增 `broker` 配置段 |
+| `config/__init__.py` | 新增 broker 配置加载 |
+| `scripts/run_live_trade.py` | 新增实盘执行 CLI |
+| `README.md` | 补充 Phase 7A 启动说明 |
+| `process.txt` | 记录本次 Phase 7A 基座变更 |
+
+**实现顺序**：
+
+1. 先定义 broker 抽象和数据结构
+2. 再补 live ORM / repository
+3. 实现 `DryRunBroker`
+4. 实现 `live_engine`
+5. 增加 `run_live_trade.py`
+6. 最后补 README / process / 基础测试
+
+**本轮不做**：
+
+- 真实资金下单
+- 完整 QMT / miniQMT 联调
+- 完整成交回报同步
+- 风控中心联动
+- 实盘 GUI 交易台
+
+**验收标准**：
+
+1. 存在统一 broker 抽象层
+2. 存在 `DryRunBroker`
+3. 存在 `run_live_trade.py`
+4. 策略信号能被翻译成统一订单请求并通过 DryRunBroker 执行
+5. 订单结果能落库并可查询
+6. 后续切换到真实 broker 时，不需要重写 live engine
+
+**等待确认**：按项目规范，Phase 7 属于中大型任务。若你确认按上述 Phase 7A 范围推进，请直接回复 `GO`，我再开始编码。
+
 ### 2026-04-20 — Phase 6（Web 可视化）启动计划
 
 **目标**：开始 Phase 6，但不一次性铺满全部 Web 功能；先落地“后端 API + 前端 Dashboard 首屏”的最小闭环。
