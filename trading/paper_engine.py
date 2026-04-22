@@ -79,7 +79,11 @@ class PaperEngine:
         logger.info(f"=== 模拟盘运行 [{self.strategy_name}] {run_date} ===")
 
         # ── 步骤1：初始化账户，T+1 解冻 ──
-        account = PaperAccount(self.strategy_name, self.initial_capital)
+        account = PaperAccount(
+            self.strategy_name,
+            self.initial_capital,
+            stock_codes=self.stock_codes,
+        )
         account.load_or_create()
         account.new_trading_day(run_date)
 

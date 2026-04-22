@@ -425,17 +425,21 @@ class PaperRepository:
         cash: float,
         total_commission: float,
         total_tax: float,
+        stock_codes: Optional[list[str]] = None,
     ) -> None:
         """更新账户资金状态"""
         session = get_session()
         try:
-            session.query(PaperAccountORM).filter_by(
-                strategy_name=strategy_name
-            ).update({
+            update_fields = {
                 "cash": cash,
                 "total_commission": total_commission,
                 "total_tax": total_tax,
-            })
+            }
+            if stock_codes is not None:
+                update_fields["stock_codes"] = json.dumps(stock_codes)
+            session.query(PaperAccountORM).filter_by(
+                strategy_name=strategy_name
+            ).update(update_fields)
             session.commit()
         except Exception as e:
             session.rollback()

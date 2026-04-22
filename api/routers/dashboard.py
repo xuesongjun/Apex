@@ -34,19 +34,31 @@ def _load_stock_codes(raw: str | None) -> list[str]:
         return []
 
 
+def _stock_codes_with_fallback(raw: str | None, positions: list | None = None) -> list[str]:
+    codes = _load_stock_codes(raw)
+    if codes:
+        return codes
+    if positions:
+        return sorted({str(p.code) for p in positions if getattr(p, "code", None)})
+    return []
+
+
 @router.get("/accounts", response_model=list[AccountOption])
 def list_accounts(repo: PaperRepoDep):
     rows = repo.list_paper_accounts()
-    return [
-        AccountOption(
-            account_id=row.strategy_name,
-            strategy_key=_strategy_key_from_account_id(row.strategy_name),
-            stock_codes=_load_stock_codes(row.stock_codes),
-            updated_at=row.updated_at,
-            created_at=row.created_at,
+    items: list[AccountOption] = []
+    for row in rows:
+        positions = repo.get_paper_positions(row.strategy_name)
+        items.append(
+            AccountOption(
+                account_id=row.strategy_name,
+                strategy_key=_strategy_key_from_account_id(row.strategy_name),
+                stock_codes=_stock_codes_with_fallback(row.stock_codes, positions),
+                updated_at=row.updated_at,
+                created_at=row.created_at,
+            )
         )
-        for row in rows
-    ]
+    return items
 
 
 @router.get("", response_model=DashboardPayload)
@@ -81,7 +93,7 @@ def get_dashboard(
     overview = DashboardOverview(
         account_id=selected,
         strategy_key=_strategy_key_from_account_id(selected),
-        stock_codes=_load_stock_codes(account_row.stock_codes),
+        stock_codes=_stock_codes_with_fallback(account_row.stock_codes, positions),
         initial_capital=round(initial_capital, 2),
         cash=round(account_row.cash or 0.0, 2),
         market_value=round(market_value, 2),

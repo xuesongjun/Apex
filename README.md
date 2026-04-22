@@ -611,6 +611,83 @@ python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 \
 - [ ] Phase 6: Web 可视化（FastAPI + Vue 3 + ECharts）
 - [ ] Phase 7: 实盘对接（QMT/miniQMT）
 
+## Phase 6 启动方式
+
+当前已落地 **Phase 6A + 6B 最小闭环**：
+
+- 后端：FastAPI 只读 Dashboard API
+- 前端：Vue 3 + TypeScript + Vite 的 Dashboard 首屏
+
+当前 Dashboard 可展示：
+
+- 模拟盘账户列表
+- 账户概览
+- 当前持仓
+- 待执行订单
+- 最近净值曲线
+
+### 后端启动
+
+```bash
+# 项目根目录
+uvicorn api.main:app --reload
+```
+
+默认访问：
+
+- 健康检查：`http://127.0.0.1:8000/health`
+- OpenAPI 文档：`http://127.0.0.1:8000/docs`
+
+主要接口：
+
+- `GET /api/dashboard/accounts`
+- `GET /api/dashboard`
+
+说明：
+
+- Dashboard API 只读，直接复用现有 `PaperRepository`
+- 若数据库中还没有模拟盘账户，页面会显示“暂无模拟盘账户”
+- 建议先运行至少一次 `scripts/run_paper_trade.py` 创建账户后再打开 Dashboard
+
+### 前端启动
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+默认访问：
+
+- `http://127.0.0.1:5173`
+
+如需自定义后端地址，可设置环境变量：
+
+```bash
+VITE_API_BASE=http://127.0.0.1:8000 npm run dev
+```
+
+### 推荐体验顺序
+
+```bash
+# 1. 先确保数据库已有模拟盘账户
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 --capital 1000000
+
+# 2. 启后端
+uvicorn api.main:app --reload
+
+# 3. 启前端
+cd frontend
+npm install
+npm run dev
+```
+
+### 当前限制
+
+- 目前只做只读 Dashboard，不包含策略管理写接口
+- 暂未实现 WebSocket，页面数据默认通过 REST 获取
+- 风控中心、回测中心完整页面、实时行情页仍未开始
+
 ## 免责声明
 
 本项目仅供学习和研究使用。量化交易存在风险，策略的历史回测表现不代表未来收益。请勿将本系统直接用于实盘交易而不经过充分验证。投资有风险，入市需谨慎。
