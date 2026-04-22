@@ -4,6 +4,119 @@
 
 ---
 
+## 2026-04-20 Phase 6（Web 可视化）启动研究
+
+### 当前代码基础
+
+已确认可直接复用的后端能力：
+
+- **数据库与 ORM**：`data/models.py` 已包含股票、行情、复权、模拟盘账户/持仓/订单/净值模型
+- **数据读取**：`data/storage/repository.py` 已有 `StockRepository` / `PaperRepository`
+- **回测结果**：`backtest/engine.py` 已能输出净值曲线与 Daily P&L Journal
+- **模拟盘状态**：`trading/paper_engine.py` 与 `scripts/run_paper_trade.py` 已有账户、持仓、挂单、净值查询链路
+
+当前缺口：
+
+- `api/` 基本为空，尚无 FastAPI 入口、路由、schema、依赖注入
+- 仓库中尚无 `frontend/` 目录，也没有 Node/Vite/TypeScript 工具链
+- `risk/` 仍为占位模块，因此 Phase 6 中“风控中心”暂时只能做占位页或只读接口
+
+### 结论：Phase 6 不应一次性全做完
+
+按当前项目状态，Phase 6 必须拆成可落地的增量：
+
+1. **Phase 6A：后端 API 基础设施 + Dashboard 只读接口**
+   - FastAPI 应用入口
+   - 健康检查
+   - Dashboard 总览接口（账户总览、持仓、待执行订单、净值）
+   - 回测结果查询接口（只读）
+   - OpenAPI / docs
+
+2. **Phase 6B：前端脚手架 + Dashboard 首屏**
+   - Vue 3 + TypeScript + Vite
+   - 首页仪表盘
+   - 账户概览卡片
+   - 持仓表格
+   - 净值曲线
+
+3. **Phase 6C：回测中心**
+   - 历史回测任务列表
+   - 回测摘要与交易明细查看
+
+4. **Phase 6D：策略管理 / 风控中心**
+   - 策略列表
+   - 参数查看/编辑
+   - 风控中心先做占位或只读视图
+
+### 推荐本次编码范围
+
+建议本轮只做 **Phase 6A + 6B 的最小闭环**，理由：
+
+- 当前后端已有数据模型和查询能力，最容易快速出结果
+- 先有 API，再接 Vue 前端，结构最稳
+- `risk/` 尚未落地，风控中心现在直接做会制造大量假接口
+
+### 推荐 UI 范围（第一版）
+
+第一版页面只做一个 **Dashboard**：
+
+- 账户总览：总资产、现金、持仓市值、累计收益
+- 持仓列表：代码、份数、成本价、现价、浮盈亏
+- 待执行订单：方向、代码、数量、执行日、原因
+- 净值曲线：最近 N 天
+
+数据来源全部基于现有 `PaperRepository`，避免引入额外业务逻辑。
+
+### 主要技术决策
+
+- **后端**：FastAPI + Pydantic v2 风格 schema
+- **前端**：Vue 3 + TypeScript + Vite
+- **图表**：首版优先 ECharts（项目已在规划中提到，接入成本较低）
+- **接口风格**：只读 GET API 优先，先不做写接口
+- **运行方式**：
+  - 后端：`uvicorn api.main:app --reload`
+  - 前端：`npm run dev`
+
+### 需要避免的陷阱
+
+1. **直接把 CLI 逻辑搬进 API**
+   - CLI 负责打印和交互；API 应直接依赖 repository/service 返回结构化数据
+
+2. **一次上来做完整策略管理 / 风控中心**
+   - 当前 `risk/` 没有实现，直接做前端会导致大量伪功能
+
+3. **把 account_id 逻辑只放在前端**
+   - 后端接口必须显式支持按 `strategy / codes / params` 或稳定 `account_id` 查询
+
+### 建议的第一批文件
+
+若进入编码，建议第一批只涉及：
+
+- `api/main.py`
+- `api/schemas.py`
+- `api/dependencies.py`
+- `api/routers/dashboard.py`
+- `api/routers/__init__.py`
+- `frontend/package.json`
+- `frontend/vite.config.ts`
+- `frontend/src/main.ts`
+- `frontend/src/App.vue`
+- `frontend/src/views/DashboardView.vue`
+- `frontend/src/api/dashboard.ts`
+
+### 验收标准（第一阶段）
+
+1. 启动 FastAPI 后可访问 `/docs`
+2. 启动前端后首页能正常加载
+3. Dashboard 能展示一个模拟盘账户的：
+   - 账户概览
+   - 持仓列表
+   - 待执行订单
+   - 最近净值曲线
+4. 移动端与桌面端都能正常显示
+
+---
+
 ## 2026-04-20 overnight_long 全链路 bug 修复研究
 
 ### 用户目标语义（明确口径）

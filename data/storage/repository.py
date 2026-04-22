@@ -375,6 +375,18 @@ class PaperRepository:
 
     # ========== paper_account ==========
 
+    def list_paper_accounts(self) -> list[PaperAccountORM]:
+        """列出全部模拟盘账户，按最近更新时间倒序。"""
+        session = get_session()
+        try:
+            return (
+                session.query(PaperAccountORM)
+                .order_by(PaperAccountORM.updated_at.desc(), PaperAccountORM.created_at.desc())
+                .all()
+            )
+        finally:
+            session.close()
+
     def get_paper_account(self, strategy_name: str) -> Optional[PaperAccountORM]:
         """获取模拟盘账户"""
         session = get_session()

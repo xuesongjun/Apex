@@ -76,6 +76,10 @@ htmlcov/
 # ========== Jupyter ==========
 .ipynb_checkpoints/
 
+# ========== Frontend ==========
+frontend/node_modules/
+frontend/dist/
+
 # ========== Claude Code ==========
 .claude/
 .codex

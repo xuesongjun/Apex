@@ -23,8 +23,6 @@ cron 注册示例（每个工作日 15:30 运行）：
                    --strategy ma_cross --codes 000001 600519
 """
 import argparse
-import hashlib
-import json
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -38,6 +36,7 @@ from data.models import init_db
 from data.storage.repository import PaperRepository, StockRepository
 from strategy.base import Direction
 from strategy.registry import STRATEGY_REGISTRY, load_strategy
+from trading.account_id import build_account_id
 from trading.paper_account import PaperAccount
 from trading.paper_engine import PaperEngine
 
@@ -58,24 +57,6 @@ def parse_params(param_strings: list[str]) -> dict:
         params[key] = value
     return params
 
-
-def build_account_id(strategy_key: str, codes: list[str], params: dict) -> str:
-    """
-    生成稳定的模拟盘账户 ID。
-
-    账户隔离维度：
-    - 策略 key（如 overnight_long）
-    - 标的列表（排序后）
-    - 参数字典（按 key 排序）
-    """
-    payload = {
-        "strategy": strategy_key,
-        "codes": sorted(codes),
-        "params": {k: params[k] for k in sorted(params)},
-    }
-    raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
-    return f"{strategy_key}:{digest}"
 
 
 # ── 输出工具（中文对齐）──────────────────────────────────────────────────
