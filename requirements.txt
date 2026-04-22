@@ -1,3 +1,5 @@
+# 基础运行依赖
+
 # 数据采集
 akshare>=1.12.0
 tushare>=1.4.0
@@ -10,10 +12,6 @@ alembic>=1.13.0
 # 数据处理
 pandas>=2.1.0
 numpy>=1.26.0
-
-# 技术指标
-ta-lib>=0.4.28
-pandas-ta>=0.3.14b
 
 # Web 框架
 fastapi>=0.109.0
@@ -35,7 +33,3 @@ python-dotenv>=1.0.0
 # 可视化（回测报告）
 matplotlib>=3.8.0
 mplfinance>=0.12.0
-
-# 测试
-pytest>=8.0.0
-pytest-asyncio>=0.23.0

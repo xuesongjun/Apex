@@ -60,9 +60,12 @@ A股量化交易系统，涵盖行情数据采集、策略引擎、回测框架�
 │   ├── daily_update.py         # 每日数据更新
 │   ├── run_backtest.py         # 策略回测入口
 │   ├── run_paper_trade.py      # 模拟盘运行入口
+│   ├── run_live_trade.py       # 实盘交易基座入口（dry-run / live）
 │   ├── run_limitdown_short.py  # 开盘做空回测策略（独立脚本）
 │   └── query_stock.py          # 数据查询验证工具
-└── requirements.txt
+├── requirements.txt            # 基础运行依赖
+├── requirements-dev.txt        # 开发 / 测试依赖
+└── requirements-strategy.txt   # 可选策略扩展依赖
 ```
 
 ## 快速开始
@@ -77,7 +80,32 @@ python -m venv .venv
 source .venv/bin/activate   # Linux/Mac
 # .venv\Scripts\activate    # Windows
 
+# 基础运行依赖
 pip install -r requirements.txt
+
+# 若需要跑测试 / 本地开发
+pip install -r requirements-dev.txt
+```
+
+### 1.1 依赖分层说明
+
+当前依赖已拆分为三层：
+
+| 文件 | 用途 |
+|------|------|
+| `requirements.txt` | 基础运行依赖（数据、回测、模拟盘、Web API） |
+| `requirements-dev.txt` | 开发与测试依赖（在 `requirements.txt` 基础上增加 pytest 等） |
+| `requirements-strategy.txt` | 可选策略扩展依赖（如 `ta-lib`、`pandas-ta`） |
+
+说明：
+
+- 日常运行项目：安装 `requirements.txt`
+- 开发 / 提交代码 / 跑测试：安装 `requirements-dev.txt`
+- 后续实现依赖重型指标库的策略时，再安装 `requirements-strategy.txt`
+
+```bash
+# 若后续要使用 ta-lib / pandas-ta 相关策略
+pip install -r requirements-strategy.txt
 ```
 
 ### 2. 初始化数据库
@@ -608,8 +636,9 @@ python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 \
 - [ ] Phase 3: 策略库扩展（KDJ、布林带、RSI、多因子）
 - [ ] Phase 4: 风控模块（仓位控制、止损止盈、黑名单）
 - [x] Phase 5: 模拟交易（`scripts/run_paper_trade.py`）
-- [ ] Phase 6: Web 可视化（FastAPI + Vue 3 + ECharts）
-- [ ] Phase 7: 实盘对接（QMT/miniQMT）
+- [x] Phase 6: Web 可视化最小闭环（FastAPI Dashboard API + Vue Dashboard 首屏）
+- [x] Phase 7A: 实盘交易基座（broker 抽象 + DryRunBroker + live engine）
+- [ ] Phase 7B: 真实券商接入（QMT/miniQMT）
 
 ## Phase 6 启动方式
 
