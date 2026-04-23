@@ -74,8 +74,20 @@ def build_broker(
             broker_account_id=BrokerConfig.account_id,
         )
 
-    if provider == "qmt":
-        return QmtBroker()
+    if mode == "live" and provider == "qmt":
+        return QmtBroker(
+            instance_id=instance_id,
+            strategy_key=strategy_key,
+            stock_codes=stock_codes,
+            initial_capital=initial_capital,
+            account_id=BrokerConfig.account_id,
+            userdata_path=BrokerConfig.qmt_userdata_path,
+            session_id=BrokerConfig.qmt_session_id,
+            account_type=BrokerConfig.qmt_account_type,
+            dynamic_price_type=BrokerConfig.qmt_dynamic_price_type,
+            strategy_name=BrokerConfig.qmt_strategy_name,
+            order_remark_prefix=BrokerConfig.qmt_order_remark_prefix,
+        )
 
     raise ValueError(f"未知 broker 组合: mode={mode}, provider={provider}")
 

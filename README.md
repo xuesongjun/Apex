@@ -638,7 +638,7 @@ python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 \
 - [x] Phase 5: 模拟交易（`scripts/run_paper_trade.py`）
 - [x] Phase 6: Web 可视化最小闭环（FastAPI Dashboard API + Vue Dashboard 首屏）
 - [x] Phase 7A: 实盘交易基座（broker 抽象 + DryRunBroker + live engine）
-- [ ] Phase 7B: 真实券商接入（QMT/miniQMT）
+- [x] Phase 7B: QMT 适配器与计划单激活链（仍需真实环境联调）
 
 ## Phase 6 启动方式
 
@@ -717,7 +717,7 @@ npm run dev
 - 暂未实现 WebSocket，页面数据默认通过 REST 获取
 - 风控中心、回测中心完整页面、实时行情页仍未开始
 
-## Phase 7A 实盘交易基座
+## Phase 7A / 7B 实盘执行链
 
 当前已落地 **Phase 7A：实盘交易基座**，但这不是“真实券商已接通”的完成态，而是先把：
 
@@ -731,7 +731,7 @@ npm run dev
   - `trading/broker/base.py`
 - Dry-run broker：
   - `trading/broker/dry_run.py`
-- QMT 适配器占位：
+- QMT 适配器：
   - `trading/broker/qmt_broker.py`
 - 实盘执行引擎骨架：
   - `trading/live_engine.py`
@@ -742,15 +742,16 @@ npm run dev
 - 实盘 CLI：
   - `scripts/run_live_trade.py`
 
-### 当前限制
+### 当前限制与边界
 
-- 默认只支持 `dry_run` 模式
-- `QmtBroker` 目前只是占位壳，还没有真实联调
+- `dry_run` 仍然是当前推荐模式
+- `QmtBroker` 已实现账户查询 / 持仓查询 / 下单 / 撤单 / 订单查询映射
+- 但 **尚未在真实 QMT / miniQMT 环境中完成联调**
 - DryRunBroker 会把订单请求落库，但**不会模拟真实成交**
 - 因此当前更适合验证：
   - 信号是否正确翻译成统一订单请求
   - live engine 与 broker 抽象是否合理
-  - 后续真实券商适配是否能平滑接入
+  - QMT adapter 在 fake 环境中的映射逻辑是否正确
 
 ### broker 配置
 
@@ -763,16 +764,23 @@ broker:
   account_id: ""
   endpoint: ""
   timeout: 5
+  qmt:
+    userdata_path: ""
+    session_id: 100001
+    account_type: "STOCK"
+    dynamic_price_type: "LATEST_PRICE"
+    strategy_name: "Apex"
+    order_remark_prefix: "Apex"
 ```
 
 说明：
 
 - `mode`：
   - `dry_run`：当前推荐，安全验证执行链
-  - `live`：预留给后续真实券商接入
+  - `live`：启用真实 broker adapter
 - `provider`：
-  - 当前仅 `dry_run` 真正可用
-  - `qmt` 只是预留接口方向
+  - `qmt`：已实现 adapter，但需要真实环境联调
+  - `dummy`：可继续作为 dry-run / 占位用途
 
 ### CLI 用法
 
@@ -796,7 +804,7 @@ broker:
 # 1. 确保数据库中已有行情
 python scripts/init_db.py --codes 513090 --start 2023-01-01
 
-# 2. dry-run 跑一次实盘基座
+# 2. dry-run 跑一次实盘基座（当前最推荐）
 python scripts/run_live_trade.py --strategy overnight_long --codes 513090 --capital 1000000
 ```
 
@@ -816,13 +824,35 @@ python scripts/run_live_trade.py --strategy overnight_long --codes 513090 --capi
 2. 验证订单生命周期能否统一落库
 3. 为后续 `QmtBroker` 真实实现提供稳定接口目标
 
-### 下一阶段（Phase 7B）
+### QMT live 模式说明
 
-后续接真实券商时，原则是：
+在真实 QMT 环境中，可切到：
+
+```bash
+python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
+    --mode live --provider qmt
+```
+
+但要满足：
+
+- 已安装 `xtquant`
+- 已有可用 QMT / miniQMT 运行环境
+- `broker.account_id`、`broker.qmt.userdata_path` 等配置完整
+
+当前代码已支持：
+
+- 账户查询
+- 持仓查询
+- 即时订单提交
+- 撤单
+- 订单查询
+- `next_open` 计划单到期激活链路
+
+但由于当前开发环境没有真实 QMT 客户端，仍需你后续在真实环境完成最终联调。
+
+### 后续仍建议继续补的内容
 
 - 不重写 `live_engine`
-- 只实现真实 broker adapter
-- 先接账户查询 / 持仓查询 / 下单 / 撤单
 - 再逐步补成交回报、对账、风控联动、通知
 
 ## 免责声明

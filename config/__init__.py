@@ -103,6 +103,13 @@ class BrokerConfig:
     account_id: str = _br.get("account_id", "")
     endpoint: str = _br.get("endpoint", "")
     timeout: int = _br.get("timeout", 5)
+    _qmt = _br.get("qmt", {})
+    qmt_userdata_path: str = _qmt.get("userdata_path", "")
+    qmt_session_id: int = _qmt.get("session_id", 100001)
+    qmt_account_type: str = _qmt.get("account_type", "STOCK")
+    qmt_dynamic_price_type: str = _qmt.get("dynamic_price_type", "LATEST_PRICE")
+    qmt_strategy_name: str = _qmt.get("strategy_name", "Apex")
+    qmt_order_remark_prefix: str = _qmt.get("order_remark_prefix", "Apex")
 
 
 # ========== 策略配置 ==========

@@ -59,6 +59,8 @@ class LiveEngine:
             logger.warning(f"{run_date} 所有标的均无行情数据，跳过")
             return {}
 
+        activation_result = self._submit_due_planned_orders(run_date, bar_map)
+
         broker_account = self.broker.get_account()
         broker_positions = self.broker.get_positions()
         self._sync_live_snapshot(broker_account, broker_positions)
@@ -105,6 +107,8 @@ class LiveEngine:
             "instance_id": self.instance_id,
             "strategy": self.strategy.name,
             "broker": self.broker.name,
+            "planned_orders_activated": activation_result["submitted"],
+            "planned_orders_failed": activation_result["rejected"],
             "signals_generated": len(signals),
             "orders_built": len(requests),
             "orders_submitted": submitted,
@@ -115,9 +119,57 @@ class LiveEngine:
         }
         logger.info(
             f"实盘基座运行完成 | 信号 {len(signals)} 个 | "
-            f"委托 {len(requests)} 笔 | 成功 {submitted} | 拒绝 {rejected}"
+            f"委托 {len(requests)} 笔 | 成功 {submitted} | 拒绝 {rejected} | "
+            f"计划单激活 {activation_result['submitted']}/{activation_result['total']}"
         )
         return summary
+
+    def _submit_due_planned_orders(
+        self,
+        run_date: date,
+        bar_map: dict[str, BarData],
+    ) -> dict:
+        due_orders = self._live_repo.get_due_live_orders(self.instance_id, run_date)
+        result = {"total": len(due_orders), "submitted": 0, "rejected": 0}
+        for row in due_orders:
+            bar = bar_map.get(row.code)
+            if bar is None:
+                self._live_repo.update_live_order(
+                    order_id=row.order_id,
+                    status="rejected",
+                    broker_order_id=row.broker_order_id or "",
+                    reason="到期执行时无行情数据",
+                )
+                result["rejected"] += 1
+                continue
+
+            req_price = row.req_price or bar.open
+            request = BrokerOrderRequest(
+                order_id=row.order_id,
+                instance_id=row.instance_id,
+                strategy_key=row.strategy_key,
+                code=row.code,
+                direction=Direction(row.direction),
+                signal_date=row.signal_date,
+                execute_at="open",
+                planned_execute_date=run_date,
+                price=req_price,
+                volume=row.req_volume or 0,
+                reason=row.reason or "",
+            )
+
+            try:
+                self.broker.submit_order(request)
+                result["submitted"] += 1
+            except Exception as e:
+                self._live_repo.update_live_order(
+                    order_id=row.order_id,
+                    status="rejected",
+                    broker_order_id=row.broker_order_id or "",
+                    reason=str(e),
+                )
+                result["rejected"] += 1
+        return result
 
     def _load_bars(self, trade_date: date) -> dict[str, BarData]:
         bar_map: dict[str, BarData] = {}

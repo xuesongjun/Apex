@@ -78,25 +78,38 @@ class DryRunBroker(BaseBroker):
         ]
 
     def submit_order(self, request: BrokerOrderRequest) -> BrokerOrder:
+        existing = self._repo.get_live_order(request.order_id)
         broker_order_id = f"DRY-{uuid.uuid4().hex[:12].upper()}"
         status = "planned" if request.execute_at == "next_open" else "submitted"
 
-        self._repo.save_live_order({
-            "order_id": request.order_id,
-            "instance_id": request.instance_id,
-            "strategy_key": request.strategy_key,
-            "broker_provider": self.name,
-            "broker_order_id": broker_order_id,
-            "code": request.code,
-            "direction": request.direction.value,
-            "signal_date": request.signal_date,
-            "planned_execute_date": request.planned_execute_date,
-            "execute_at": request.execute_at,
-            "req_price": request.price,
-            "req_volume": request.volume,
-            "status": status,
-            "reason": request.reason,
-        })
+        if existing is None:
+            self._repo.save_live_order({
+                "order_id": request.order_id,
+                "instance_id": request.instance_id,
+                "strategy_key": request.strategy_key,
+                "broker_provider": self.name,
+                "broker_order_id": broker_order_id,
+                "code": request.code,
+                "direction": request.direction.value,
+                "signal_date": request.signal_date,
+                "planned_execute_date": request.planned_execute_date,
+                "execute_at": request.execute_at,
+                "req_price": request.price,
+                "req_volume": request.volume,
+                "status": status,
+                "reason": request.reason,
+            })
+        else:
+            self._repo.update_live_order(
+                order_id=request.order_id,
+                status=status,
+                broker_order_id=existing.broker_order_id or broker_order_id,
+                filled_price=existing.filled_price or 0.0,
+                filled_volume=existing.filled_volume or 0,
+                commission=existing.commission or 0.0,
+                reason=request.reason or existing.reason or "",
+            )
+            broker_order_id = existing.broker_order_id or broker_order_id
 
         return BrokerOrder(
             order_id=request.order_id,

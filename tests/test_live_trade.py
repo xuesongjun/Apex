@@ -147,3 +147,47 @@ def test_live_engine_builds_buy_close_and_sell_next_open_for_overnight_long(tmp_
     assert by_execute_at["next_open"].planned_execute_date == date(2026, 1, 6)
     assert by_execute_at["next_open"].req_volume == 9000
     assert by_execute_at["next_open"].status == "planned"
+
+
+def test_live_engine_activates_due_planned_orders_on_execute_date(tmp_path, monkeypatch):
+    setup_temp_db(tmp_path, monkeypatch)
+
+    broker = DryRunBroker(
+        instance_id="overnight_long:test",
+        strategy_key="overnight_long",
+        stock_codes=["513090"],
+        initial_capital=10_000.0,
+    )
+    repo = LiveRepository()
+    repo.save_live_order({
+        "order_id": "planned-order-1",
+        "instance_id": "overnight_long:test",
+        "strategy_key": "overnight_long",
+        "broker_provider": "dry_run",
+        "broker_order_id": "",
+        "code": "513090",
+        "direction": "SELL",
+        "signal_date": date(2026, 1, 5),
+        "planned_execute_date": date(2026, 1, 6),
+        "execute_at": "next_open",
+        "req_price": 1.08,
+        "req_volume": 9000,
+        "status": "planned",
+        "reason": "activate-next-day",
+    })
+
+    engine = LiveEngine(
+        strategy=OvernightLongStrategy(),
+        strategy_key="overnight_long",
+        stock_codes=["513090"],
+        broker=broker,
+        instance_id="overnight_long:test",
+        run_date=date(2026, 1, 6),
+    )
+    engine._repo = FakeStockRepository(make_bars())
+
+    summary = engine.run_daily()
+    row = repo.get_live_order("planned-order-1")
+
+    assert summary["planned_orders_activated"] == 1
+    assert row.status == "submitted"

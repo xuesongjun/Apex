@@ -766,6 +766,13 @@ class LiveRepository:
         finally:
             session.close()
 
+    def get_live_order(self, order_id: str) -> Optional[LiveOrderORM]:
+        session = get_session()
+        try:
+            return session.query(LiveOrderORM).filter_by(order_id=order_id).first()
+        finally:
+            session.close()
+
     def update_live_order(
         self,
         order_id: str,
@@ -811,5 +818,21 @@ class LiveRepository:
             if end_date:
                 q = q.filter(LiveOrderORM.signal_date <= end_date)
             return q.order_by(LiveOrderORM.created_at.desc()).all()
+        finally:
+            session.close()
+
+    def get_due_live_orders(self, instance_id: str, execute_date: date) -> list[LiveOrderORM]:
+        session = get_session()
+        try:
+            return (
+                session.query(LiveOrderORM)
+                .filter_by(
+                    instance_id=instance_id,
+                    status="planned",
+                    planned_execute_date=execute_date,
+                )
+                .order_by(LiveOrderORM.created_at)
+                .all()
+            )
         finally:
             session.close()

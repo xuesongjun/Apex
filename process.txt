@@ -1,3 +1,7 @@
+[2026-04-23 12:10] feat 推进 Phase 7B（QMT adapter + 计划单到期激活链）
+- 改动文件：config/settings.yaml, config/__init__.py, data/storage/repository.py, trading/broker/qmt_broker.py, trading/broker/dry_run.py, trading/live_engine.py, scripts/run_live_trade.py, README.md, tests/test_live_trade.py, tests/test_qmt_broker.py
+- 改动说明：在 Phase 7A 基座之上继续推进到可联 QMT 的 Phase 7B。新增 `broker.qmt` 配置段（`userdata_path/session_id/account_type/dynamic_price_type/strategy_name/order_remark_prefix`），并补到 `BrokerConfig`。`QmtBroker` 从占位壳升级为真实 adapter：支持 xtquant 懒加载、连接、订阅、账户查询、持仓查询、即时订单提交、撤单和订单列表映射；当 `execute_at=next_open` 时先按 planned 落库，等待到期后由 `LiveEngine` 激活。为此补充了 `LiveRepository.get_live_order()` / `get_due_live_orders()`，并在 `LiveEngine` 中加入“计划单到期激活”链路；`DryRunBroker` 也同步支持已存在 planned 订单在到期日转为 submitted。新增测试 `tests/test_qmt_broker.py`，用 fake xtquant 模块验证账户/持仓/下单映射；同时扩展 `tests/test_live_trade.py`，验证 planned 订单会在执行日被激活。验证结果：`pytest -q` 为 20 passed。说明：当前 QMT adapter 已具备代码能力，但仍需真实 QMT / miniQMT 环境完成最终联调。
+
 [2026-04-23 11:45] chore 配置 PR/Push 自动化 CI 并完成依赖分层
 - 改动文件：.github/workflows/ci.yml, requirements.txt, requirements-dev.txt, requirements-strategy.txt, process.txt
 - 改动说明：为后续 PR / Push 引入最小可用的 GitHub Actions 自动化测试，同时直接消除此前遗留的 `requirements-ci.txt` 过渡方案。新增 `backend-tests` 和 `frontend-build` 两个 job：后端使用 Python 3.11 安装 `requirements-dev.txt` 后执行 `pytest -q`，前端使用 Node 20 执行 `npm ci && npm run build`。依赖体系正式调整为三层：`requirements.txt` 作为基础运行依赖，`requirements-dev.txt` 用于开发/测试，`requirements-strategy.txt` 收纳 `ta-lib` / `pandas-ta` 这类当前仓库未实际引用、但未来策略扩展可能使用的重型依赖。这样既保持主 CI 稳定，又把技术债真正清掉，避免以后忘记处理。

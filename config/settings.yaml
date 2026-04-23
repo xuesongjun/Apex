@@ -84,6 +84,13 @@ broker:
   account_id: ""       # 券商账户ID（可为空，后续本地配置覆盖）
   endpoint: ""         # 预留给远程网关或本地桥接服务
   timeout: 5           # 秒
+  qmt:
+    userdata_path: ""       # QMT userdata 目录
+    session_id: 100001      # 会话ID
+    account_type: "STOCK"   # STOCK / CREDIT 等
+    dynamic_price_type: "LATEST_PRICE"   # 当 req_price=0 时使用
+    strategy_name: "Apex"
+    order_remark_prefix: "Apex"
 
 # 日志配置
 logging:
