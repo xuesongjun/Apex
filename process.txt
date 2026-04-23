@@ -1,3 +1,7 @@
+[2026-04-24 00:10] test 增加 Dashboard API 路由逻辑测试
+- 改动文件：tests/test_api_dashboard.py, process.txt
+- 改动说明：为 Phase 6 Dashboard 只读接口补充回归测试，避免后续继续演进 live / paper / Web 时把账户列表与概览接口逻辑改坏。新增 `tests/test_api_dashboard.py`，覆盖四类行为：`health()` 健康检查返回、`/api/dashboard/accounts` 在 `stock_codes` 缺失时从持仓回退推导标的列表、`/api/dashboard` 正常返回 overview/positions/pending_orders/nav 结构，以及未知 `account_id` 时抛出 404。由于当前环境下 `FastAPI TestClient` 存在不稳定卡住现象，本轮测试采用直接调用路由函数的方式锁定接口逻辑本身。验证结果：新增 API 测试 4 条通过，全量 `pytest -q` 为 27 passed。
+
 [2026-04-23 12:40] feat 接入邮件通知到 live chain
 - 改动文件：config/__init__.py, notification/__init__.py, notification/email_notifier.py, scripts/run_live_trade.py, trading/live_engine.py, tests/test_email_notifier.py, tests/test_live_trade.py, README.md, process.txt
 - 改动说明：按既定通知路线优先实现邮件通知，并接入实盘基座链路。新增 `NotificationConfig` 读取 `notification.email` 配置；新增 `EmailNotifier`，基于 Python 标准库 `smtplib + email.message` 实现文本邮件发送，并支持 `465 -> SMTP_SSL`、其他端口 -> `SMTP + STARTTLS`。在 `run_live_trade.py` 中接入通知初始化、成功日报摘要邮件和 fatal 异常邮件；在 `LiveEngine` 中接入 broker 提交失败与 planned 订单激活失败告警。为保证后续不回归，新增 `tests/test_email_notifier.py` 验证 SMTP 发送链路与配置开关，并扩展 `tests/test_live_trade.py` 验证 planned 订单激活失败时会触发 notifier。README 同步补充了 live chain 邮件通知的配置方式、触发场景和使用说明。验证结果：`pytest -q` 为 23 passed。
