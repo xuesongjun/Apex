@@ -55,6 +55,8 @@ config/settings.local.yaml
 # 回测报告和图表
 output/
 reports/
+trades.csv
+result.csv
 *.png
 *.jpg
 *.html
@@ -74,5 +76,11 @@ htmlcov/
 # ========== Jupyter ==========
 .ipynb_checkpoints/
 
+# ========== Frontend ==========
+frontend/node_modules/
+frontend/dist/
+
 # ========== Claude Code ==========
 .claude/
+.codex
+.codex/

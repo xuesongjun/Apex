@@ -54,6 +54,7 @@ def calculate_metrics(
     benchmark_returns: pd.Series = None,
     total_commission: float = 0.0,
     total_tax: float = 0.0,
+    initial_capital: float | None = None,
 ) -> BacktestMetrics:
     """
     计算回测绩效指标
@@ -73,7 +74,7 @@ def calculate_metrics(
     df = df.sort_values("date").reset_index(drop=True)
 
     equity = df["total_equity"].values
-    initial = equity[0]
+    initial = initial_capital if initial_capital and initial_capital > 0 else equity[0]
     final = equity[-1]
     trading_days = len(equity)
 
@@ -137,7 +138,7 @@ def calculate_metrics(
     calmar_ratio = annual_return / abs(max_drawdown) if max_drawdown != 0 else 0.0
 
     # ========== 交易指标 ==========
-    sell_trades = [t for t in trades if t.get("direction") == "SELL"]
+    sell_trades = [t for t in trades if t.get("profit") is not None]
     total_trades = len(sell_trades)
     wins = [t for t in sell_trades if t.get("profit", 0) > 0]
     losses = [t for t in sell_trades if t.get("profit", 0) <= 0]

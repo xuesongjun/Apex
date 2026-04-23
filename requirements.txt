@@ -1,3 +1,5 @@
+# 基础运行依赖
+
 # 数据采集
 akshare>=1.12.0
 tushare>=1.4.0
@@ -11,12 +13,8 @@ alembic>=1.13.0
 pandas>=2.1.0
 numpy>=1.26.0
 
-# 技术指标
-ta-lib>=0.4.28
-pandas-ta>=0.3.14b
-
 # Web 框架
-fastapi>=0.109.0
+fastapi>=0.109.0,<0.137
 uvicorn>=0.27.0
 websockets>=12.0
 
@@ -29,13 +27,11 @@ redis>=5.0.0
 # 工具
 pyyaml>=6.0
 loguru>=0.7.0
-httpx>=0.27.0
+# httpx 0.28.x 在当前环境组合下会导致 ASGI/TestClient 测试不稳定卡住，
+# 先约束到 0.27.x，等后续统一升级 FastAPI/Starlette/httpx 时再放开。
+httpx>=0.27.0,<0.28
 python-dotenv>=1.0.0
 
 # 可视化（回测报告）
 matplotlib>=3.8.0
 mplfinance>=0.12.0
-
-# 测试
-pytest>=8.0.0
-pytest-asyncio>=0.23.0

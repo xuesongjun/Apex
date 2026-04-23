@@ -92,7 +92,36 @@ class BacktestConfig:
     _bt = _settings.get("backtest", {})
     initial_capital: float = _bt.get("initial_capital", 1000000.0)
     benchmark: str = _bt.get("benchmark", "000300")
-    slippage: float = _bt.get("slippage", 0.01)
+    slippage_rate: float = _bt.get("slippage_rate", 0.0)
+
+
+# ========== Broker 配置 ==========
+class BrokerConfig:
+    _br = _settings.get("broker", {})
+    mode: str = _br.get("mode", "dry_run")
+    provider: str = _br.get("provider", "qmt")
+    account_id: str = _br.get("account_id", "")
+    endpoint: str = _br.get("endpoint", "")
+    timeout: int = _br.get("timeout", 5)
+    _qmt = _br.get("qmt", {})
+    qmt_userdata_path: str = _qmt.get("userdata_path", "")
+    qmt_session_id: int = _qmt.get("session_id", 100001)
+    qmt_account_type: str = _qmt.get("account_type", "STOCK")
+    qmt_dynamic_price_type: str = _qmt.get("dynamic_price_type", "LATEST_PRICE")
+    qmt_strategy_name: str = _qmt.get("strategy_name", "Apex")
+    qmt_order_remark_prefix: str = _qmt.get("order_remark_prefix", "Apex")
+
+
+# ========== 通知配置 ==========
+class NotificationConfig:
+    _nt = _settings.get("notification", {})
+    _email = _nt.get("email", {})
+    email_enabled: bool = _email.get("enabled", False)
+    email_smtp_server: str = _email.get("smtp_server", "")
+    email_smtp_port: int = _email.get("smtp_port", 465)
+    email_sender: str = _email.get("sender", "")
+    email_password: str = _email.get("password", "")
+    email_receiver: str = _email.get("receiver", "")
 
 
 # ========== 策略配置 ==========
