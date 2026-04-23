@@ -15,6 +15,14 @@ from trading.broker.dry_run import DryRunBroker
 from trading.live_engine import LiveEngine
 
 
+class RecordingNotifier:
+    def __init__(self):
+        self.messages: list[tuple[str, str]] = []
+
+    def notify(self, subject: str, body: str) -> None:
+        self.messages.append((subject, body))
+
+
 class FakeStockRepository:
     def __init__(self, bars_by_code: dict[str, list[dict]]):
         self._bars_by_code = bars_by_code
@@ -191,3 +199,53 @@ def test_live_engine_activates_due_planned_orders_on_execute_date(tmp_path, monk
 
     assert summary["planned_orders_activated"] == 1
     assert row.status == "submitted"
+
+
+def test_live_engine_notifies_when_activation_fails_due_to_missing_bar(tmp_path, monkeypatch):
+    setup_temp_db(tmp_path, monkeypatch)
+
+    broker = DryRunBroker(
+        instance_id="overnight_long:test",
+        strategy_key="overnight_long",
+        stock_codes=["513090"],
+        initial_capital=10_000.0,
+    )
+    repo = LiveRepository()
+    repo.save_live_order({
+        "order_id": "planned-order-2",
+        "instance_id": "overnight_long:test",
+        "strategy_key": "overnight_long",
+        "broker_provider": "dry_run",
+        "broker_order_id": "",
+        "code": "000001",
+        "direction": "SELL",
+        "signal_date": date(2026, 1, 5),
+        "planned_execute_date": date(2026, 1, 6),
+        "execute_at": "next_open",
+        "req_price": 1.08,
+        "req_volume": 9000,
+        "status": "planned",
+        "reason": "activate-next-day",
+    })
+
+    notifier = RecordingNotifier()
+    engine = LiveEngine(
+        strategy=OvernightLongStrategy(),
+        strategy_key="overnight_long",
+        stock_codes=["513090"],
+        broker=broker,
+        instance_id="overnight_long:test",
+        notifier=notifier,
+        run_date=date(2026, 1, 6),
+    )
+    engine._repo = FakeStockRepository(make_bars())
+
+    summary = engine.run_daily()
+    row = repo.get_live_order("planned-order-2")
+
+    assert summary["planned_orders_failed"] == 1
+    assert row.status == "rejected"
+    assert len(notifier.messages) == 1
+    subject, body = notifier.messages[0]
+    assert "Activation Failed" in subject
+    assert "000001" in body

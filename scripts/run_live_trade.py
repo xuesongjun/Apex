@@ -15,6 +15,7 @@ from loguru import logger
 
 from config import BrokerConfig, setup_logging
 from data.models import init_db
+from notification import EmailNotifier
 from strategy.registry import STRATEGY_REGISTRY, load_strategy
 from trading.account_id import build_account_id
 from trading.broker import DryRunBroker, QmtBroker
@@ -48,6 +49,8 @@ def print_summary(summary: dict):
     print(f"  Broker：{summary['broker']}")
     print("=" * 64)
     print(f"\n  生成信号：{summary['signals_generated']} 个")
+    print(f"  激活计划单：{summary['planned_orders_activated']} 笔")
+    print(f"  计划单失败：{summary['planned_orders_failed']} 笔")
     print(f"  构建委托：{summary['orders_built']} 笔")
     print(f"  提交成功：{summary['orders_submitted']} 笔")
     print(f"  提交失败：{summary['orders_rejected']} 笔")
@@ -93,6 +96,35 @@ def build_broker(
     raise ValueError(f"未知 broker 组合: mode={mode}, provider={provider}")
 
 
+def send_email_safe(notifier, subject: str, body: str):
+    if not notifier:
+        return
+    try:
+        notifier.notify(subject, body)
+    except Exception as e:
+        logger.error(f"邮件通知发送失败: {e}")
+
+
+def format_summary_email(summary: dict) -> tuple[str, str]:
+    subject = f"[Apex][Live][Summary] {summary['strategy']} {summary['run_date']}"
+    body = (
+        f"实例ID: {summary['instance_id']}\n"
+        f"策略: {summary['strategy']}\n"
+        f"Broker: {summary['broker']}\n"
+        f"运行日期: {summary['run_date']}\n"
+        f"激活计划单: {summary['planned_orders_activated']}\n"
+        f"计划单失败: {summary['planned_orders_failed']}\n"
+        f"生成信号: {summary['signals_generated']}\n"
+        f"构建委托: {summary['orders_built']}\n"
+        f"提交成功: {summary['orders_submitted']}\n"
+        f"提交失败: {summary['orders_rejected']}\n"
+        f"账户总资产: {summary['total_equity']:.2f}\n"
+        f"可用现金: {summary['cash']:.2f}\n"
+        f"持仓数量: {summary['position_count']}\n"
+    )
+    return subject, body
+
+
 def main():
     parser = argparse.ArgumentParser(description="A股实盘交易基座（Phase 7A）")
     parser.add_argument("--strategy", "-s", required=True,
@@ -113,6 +145,7 @@ def main():
 
     setup_logging()
     init_db()
+    notifier = EmailNotifier.from_config()
 
     params = parse_params(args.params)
     strategy = load_strategy(args.strategy, params)
@@ -142,10 +175,29 @@ def main():
         broker=broker,
         instance_id=instance_id,
         strategy_key=args.strategy,
+        notifier=notifier,
         run_date=run_date,
     )
-    summary = engine.run_daily()
+    try:
+        summary = engine.run_daily()
+    except Exception as e:
+        send_email_safe(
+            notifier,
+            subject=f"[Apex][Live][Fatal] {args.strategy} {run_date}",
+            body=(
+                f"实例ID: {instance_id}\n"
+                f"策略: {args.strategy}\n"
+                f"Broker: mode={args.mode}, provider={args.provider}\n"
+                f"运行日期: {run_date}\n"
+                f"错误: {e}\n"
+            ),
+        )
+        raise
+
     print_summary(summary)
+    if summary:
+        subject, body = format_summary_email(summary)
+        send_email_safe(notifier, subject, body)
 
 
 if __name__ == "__main__":

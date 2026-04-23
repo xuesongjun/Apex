@@ -748,6 +748,7 @@ npm run dev
 - `QmtBroker` 已实现账户查询 / 持仓查询 / 下单 / 撤单 / 订单查询映射
 - 但 **尚未在真实 QMT / miniQMT 环境中完成联调**
 - DryRunBroker 会把订单请求落库，但**不会模拟真实成交**
+- 邮件通知已接入 live chain，但企业微信 / 个人微信仍未接入
 - 因此当前更适合验证：
   - 信号是否正确翻译成统一订单请求
   - live engine 与 broker 抽象是否合理
@@ -847,6 +848,10 @@ python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
 - 撤单
 - 订单查询
 - `next_open` 计划单到期激活链路
+- 邮件通知：
+  - 日报摘要
+  - 订单提交失败
+  - 计划单激活失败
 
 但由于当前开发环境没有真实 QMT 客户端，仍需你后续在真实环境完成最终联调。
 
@@ -854,6 +859,38 @@ python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
 
 - 不重写 `live_engine`
 - 再逐步补成交回报、对账、风控联动、通知
+
+### 邮件通知（live chain）
+
+当前 `run_live_trade.py` 和 `LiveEngine` 已接入邮件通知。
+
+支持的通知场景：
+
+- `run_live_trade.py` 运行成功后的日报摘要
+- `run_live_trade.py` 的致命异常
+- broker 提交失败
+- planned `next_open` 订单激活失败
+
+配置方式：
+
+```yaml
+notification:
+  email:
+    enabled: true
+    smtp_server: "smtp.example.com"
+    smtp_port: 465
+    sender: "your@example.com"
+    password: "app-password"
+    receiver: "receiver@example.com"
+```
+
+说明：
+
+- 建议使用邮箱的 SMTP 授权码 / app password
+- 端口 `465` 走 `SMTP_SSL`
+- 其他端口默认走 `SMTP + STARTTLS`
+
+启用后，无需额外 CLI 参数，`run_live_trade.py` 会自动读取配置并发送通知。
 
 ## 免责声明
 

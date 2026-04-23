@@ -112,6 +112,18 @@ class BrokerConfig:
     qmt_order_remark_prefix: str = _qmt.get("order_remark_prefix", "Apex")
 
 
+# ========== 通知配置 ==========
+class NotificationConfig:
+    _nt = _settings.get("notification", {})
+    _email = _nt.get("email", {})
+    email_enabled: bool = _email.get("enabled", False)
+    email_smtp_server: str = _email.get("smtp_server", "")
+    email_smtp_port: int = _email.get("smtp_port", 465)
+    email_sender: str = _email.get("sender", "")
+    email_password: str = _email.get("password", "")
+    email_receiver: str = _email.get("receiver", "")
+
+
 # ========== 策略配置 ==========
 STRATEGY_CONFIG = _strategies.get("strategies", {})
 STOCK_POOL_CONFIG = _strategies.get("stock_pool", {})

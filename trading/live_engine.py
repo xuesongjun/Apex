@@ -16,6 +16,7 @@ from loguru import logger
 
 from backtest.rules import TradingRules
 from data.storage.repository import LiveRepository, StockRepository
+from notification import Notifier
 from strategy.base import BarData, BaseStrategy, Direction, Position, Signal
 from trading.broker import BaseBroker, BrokerOrderRequest, BrokerPosition
 
@@ -30,6 +31,7 @@ class LiveEngine:
         broker: BaseBroker,
         instance_id: str,
         strategy_key: Optional[str] = None,
+        notifier: Optional[Notifier] = None,
         run_date: Optional[date] = None,
     ):
         self.strategy = strategy
@@ -37,6 +39,7 @@ class LiveEngine:
         self.stock_codes = stock_codes
         self.broker = broker
         self.instance_id = instance_id
+        self.notifier = notifier
         self.run_date = run_date or date.today()
 
         self._repo = StockRepository()
@@ -100,6 +103,22 @@ class LiveEngine:
                 submitted += 1
             except Exception as e:
                 logger.error(f"broker 提交失败 {request.code} {request.direction.value}: {e}")
+                self._notify(
+                    subject=f"[Apex][Live][Submit Failed] {self.strategy_key} {request.code}",
+                    body=(
+                        f"实例ID: {self.instance_id}\n"
+                        f"策略: {self.strategy.name}\n"
+                        f"Broker: {self.broker.name}\n"
+                        f"订单ID: {request.order_id}\n"
+                        f"方向: {request.direction.value}\n"
+                        f"代码: {request.code}\n"
+                        f"执行时机: {request.execute_at}\n"
+                        f"计划执行日: {request.planned_execute_date}\n"
+                        f"价格: {request.price}\n"
+                        f"数量: {request.volume}\n"
+                        f"原因: {e}\n"
+                    ),
+                )
                 rejected += 1
 
         summary = {
@@ -140,6 +159,18 @@ class LiveEngine:
                     broker_order_id=row.broker_order_id or "",
                     reason="到期执行时无行情数据",
                 )
+                self._notify(
+                    subject=f"[Apex][Live][Activation Failed] {self.strategy_key} {row.code}",
+                    body=(
+                        f"实例ID: {self.instance_id}\n"
+                        f"策略: {self.strategy.name}\n"
+                        f"Broker: {self.broker.name}\n"
+                        f"订单ID: {row.order_id}\n"
+                        f"代码: {row.code}\n"
+                        f"执行日: {run_date}\n"
+                        "原因: 到期执行时无行情数据\n"
+                    ),
+                )
                 result["rejected"] += 1
                 continue
 
@@ -167,6 +198,18 @@ class LiveEngine:
                     status="rejected",
                     broker_order_id=row.broker_order_id or "",
                     reason=str(e),
+                )
+                self._notify(
+                    subject=f"[Apex][Live][Activation Failed] {self.strategy_key} {row.code}",
+                    body=(
+                        f"实例ID: {self.instance_id}\n"
+                        f"策略: {self.strategy.name}\n"
+                        f"Broker: {self.broker.name}\n"
+                        f"订单ID: {row.order_id}\n"
+                        f"代码: {row.code}\n"
+                        f"执行日: {run_date}\n"
+                        f"原因: {e}\n"
+                    ),
                 )
                 result["rejected"] += 1
         return result
@@ -404,3 +447,11 @@ class LiveEngine:
                 return check
             check += timedelta(days=1)
         return None
+
+    def _notify(self, subject: str, body: str) -> None:
+        if not self.notifier:
+            return
+        try:
+            self.notifier.notify(subject, body)
+        except Exception as e:
+            logger.error(f"邮件通知发送失败: {e}")
