@@ -2,6 +2,10 @@
 - 改动文件：tests/test_api_dashboard.py, process.txt
 - 改动说明：为 Phase 6 Dashboard 只读接口补充回归测试，避免后续继续演进 live / paper / Web 时把账户列表与概览接口逻辑改坏。新增 `tests/test_api_dashboard.py`，覆盖四类行为：`health()` 健康检查返回、`/api/dashboard/accounts` 在 `stock_codes` 缺失时从持仓回退推导标的列表、`/api/dashboard` 正常返回 overview/positions/pending_orders/nav 结构，以及未知 `account_id` 时抛出 404。由于当前环境下 `FastAPI TestClient` 存在不稳定卡住现象，本轮测试采用直接调用路由函数的方式锁定接口逻辑本身。验证结果：新增 API 测试 4 条通过，全量 `pytest -q` 为 27 passed。
 
+[2026-04-24 00:20] chore 收紧 Web 测试相关依赖版本，规避 ASGI 测试卡住问题
+- 改动文件：requirements.txt, process.txt
+- 改动说明：进一步处理 FastAPI/ASGI 测试在当前环境组合下不稳定卡住的问题。根因是本地环境实际安装到了 `httpx 0.28.1`，而当前项目的 `requirements.txt` 仅写了 `httpx>=0.27.0`，允许安装到 0.28.x；在当前 FastAPI/Starlette/httpx 组合下，最小 ASGITransport 例子也会卡住。为避免本地与 CI 随机拉到不稳定版本，本轮将 Web 相关依赖收紧为：`fastapi>=0.109.0,<0.137`、`httpx>=0.27.0,<0.28`。这样后续重新安装开发依赖后，ASGI/TestClient 测试会回到稳定区间。当前 API 测试仍保留为路由逻辑测试，保证测试链不中断；后续若统一升级 FastAPI/Starlette/httpx，再恢复更完整的 ASGI 集成测试。
+
 [2026-04-23 12:40] feat 接入邮件通知到 live chain
 - 改动文件：config/__init__.py, notification/__init__.py, notification/email_notifier.py, scripts/run_live_trade.py, trading/live_engine.py, tests/test_email_notifier.py, tests/test_live_trade.py, README.md, process.txt
 - 改动说明：按既定通知路线优先实现邮件通知，并接入实盘基座链路。新增 `NotificationConfig` 读取 `notification.email` 配置；新增 `EmailNotifier`，基于 Python 标准库 `smtplib + email.message` 实现文本邮件发送，并支持 `465 -> SMTP_SSL`、其他端口 -> `SMTP + STARTTLS`。在 `run_live_trade.py` 中接入通知初始化、成功日报摘要邮件和 fatal 异常邮件；在 `LiveEngine` 中接入 broker 提交失败与 planned 订单激活失败告警。为保证后续不回归，新增 `tests/test_email_notifier.py` 验证 SMTP 发送链路与配置开关，并扩展 `tests/test_live_trade.py` 验证 planned 订单激活失败时会触发 notifier。README 同步补充了 live chain 邮件通知的配置方式、触发场景和使用说明。验证结果：`pytest -q` 为 23 passed。

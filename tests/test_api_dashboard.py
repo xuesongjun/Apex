@@ -1,5 +1,10 @@
 """
 Dashboard API 路由逻辑测试
+
+说明：
+- 当前环境下 `httpx 0.28.1` + FastAPI/Starlette 组合会导致 ASGI 测试链不稳定卡住
+- 仓库已通过 `requirements.txt` 收紧到 `httpx<0.28`
+- 在开发环境按新依赖重建之前，这里先锁路由逻辑本身，保证回归稳定
 """
 from __future__ import annotations
 
