@@ -142,6 +142,7 @@ def test_qmt_broker_queries_account_positions_and_submits_order(tmp_path, monkey
         strategy_key="overnight_long",
         stock_codes=["513090"],
         initial_capital=100000.0,
+        provider_name="qmt",
         account_id="demo-account",
         userdata_path="/tmp/qmt",
         session_id=100001,

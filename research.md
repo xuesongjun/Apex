@@ -4,6 +4,63 @@
 
 ---
 
+## 2026-04-23 Phase 7B（QMT / miniQMT adapter）研究补充
+
+### 当前可落地范围
+
+在当前环境里无法完成真正的 QMT 联机验证，因为：
+
+- 未安装 `xtquant`
+- 无真实 QMT / miniQMT 客户端环境
+- 无真实账户
+
+但这并不妨碍把 **adapter 代码层** 做到可联调状态。
+
+### 本轮应达到的目标
+
+1. `QmtBroker` 不再是空壳
+2. 支持：
+   - connect / subscribe
+   - 账户查询
+   - 持仓查询
+   - 即时下单
+   - 撤单
+   - 订单列表查询
+3. `next_open` 计划单由 `LiveEngine` 在执行日激活
+4. `miniqmt` 作为 `qmt` 的同路径别名支持
+
+### 明确不在本轮范围
+
+- 真实环境联调
+- 成交回报 callback 持久化
+- 自动对账修复
+- 风控联动拦截
+- 生产级异常恢复
+
+### 设计结论
+
+- `QmtBroker` 应保持 **懒加载 xtquant**
+  - 避免在无 QMT 环境时影响其它功能
+- `run_live_trade.py --mode live --provider qmt|miniqmt`
+  - 应能直接构造 `QmtBroker`
+- 若 `xtquant` 缺失，应报出清晰错误，而不是静默失败
+- planned `next_open` 订单不要直接交给 `QmtBroker`
+  - 应先落 `planned`
+  - 到执行日由 `LiveEngine` 激活并再次调用 `submit_order()`
+
+### 验证策略
+
+真实环境不可用时，用 fake `xtquant` 模块验证：
+
+- 账户映射
+- 持仓映射
+- 下单参数映射
+- planned 订单在执行日激活
+
+这样至少能把 adapter 逻辑锁住，后续真实联调只剩环境问题。
+
+---
+
 ## 2026-04-23 Phase 7（实盘交易基座）启动研究
 
 ### 当前代码现状

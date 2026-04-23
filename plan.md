@@ -546,9 +546,67 @@ a-stock-trading-system/
   - FastAPI / Web 前端
   - 实盘对接
 
+### Phase 7 后续 TODO（按优先级）
+
+- [ ] 在真实 QMT / miniQMT 环境完成联调：
+  - 验证 `xtquant` 可导入
+  - 验证 connect / subscribe
+  - 验证账户查询
+  - 验证持仓查询
+  - 验证最小测试单下单 / 撤单 / 订单状态查询
+- [ ] 接入邮件通知到 live chain：
+  - `run_live_trade.py` 运行摘要
+  - broker 连接失败
+  - 订单提交失败
+  - planned 订单激活失败
+- [ ] 增加 live 对账能力：
+  - 本地 `live_account / live_position / live_order` 与券商状态只读比对
+  - 输出差异报告
+- [ ] 增加 live 风控兜底：
+  - 单票最大仓位检查
+  - 总仓位上限检查
+  - 非交易时段禁止提交
+  - 非法价格 / 数量拦截
+- [ ] 在 Web 中增加 live 只读看板：
+  - live 账户概览
+  - live 持仓
+  - live 订单状态
+  - planned / submitted / accepted / rejected / cancelled 状态展示
+- [ ] 再进入更完整的实盘策略运行与小资金验证
+
 ---
 
 ## 9. 迭代日志
+
+### 2026-04-23 — Phase 7B（QMT / miniQMT adapter）推进
+
+**目标**：在不依赖真实 QMT 环境的前提下，把 `QmtBroker` 从占位壳推进到“可联调状态”。
+
+**关联研究**：见 `research.md` → "2026-04-23 Phase 7B（QMT / miniQMT adapter）研究补充"
+
+**本轮范围**：
+
+| 模块 | 范围 |
+|------|------|
+| QMT Adapter | connect / subscribe / query account / query positions / submit order / cancel / list orders |
+| Live Engine | planned `next_open` 到期激活 |
+| CLI | `--mode live --provider qmt|miniqmt` 接通 |
+| 测试 | fake xtquant 映射测试 + 计划单激活测试 |
+
+**不做**：
+
+- 真实 QMT / miniQMT 联调
+- 成交回报 callback 持久化
+- 自动对账修复
+- 风控联动
+
+**验收标准**：
+
+1. `QmtBroker` 不再是空壳
+2. `miniqmt` 与 `qmt` 共享 adapter 路径
+3. planned `next_open` 订单会在执行日激活
+4. fake xtquant 测试通过
+5. 全量 `pytest` 通过
 
 ### 2026-04-23 — Phase 7（实盘交易基座）启动计划
 

@@ -74,12 +74,13 @@ def build_broker(
             broker_account_id=BrokerConfig.account_id,
         )
 
-    if mode == "live" and provider == "qmt":
+    if mode == "live" and provider in {"qmt", "miniqmt"}:
         return QmtBroker(
             instance_id=instance_id,
             strategy_key=strategy_key,
             stock_codes=stock_codes,
             initial_capital=initial_capital,
+            provider_name=provider,
             account_id=BrokerConfig.account_id,
             userdata_path=BrokerConfig.qmt_userdata_path,
             session_id=BrokerConfig.qmt_session_id,

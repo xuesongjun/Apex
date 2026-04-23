@@ -31,6 +31,7 @@ class QmtBroker(BaseBroker):
         strategy_key: str,
         stock_codes: list[str],
         initial_capital: float,
+        provider_name: str,
         account_id: str,
         userdata_path: str,
         session_id: int,
@@ -48,6 +49,7 @@ class QmtBroker(BaseBroker):
         self.strategy_key = strategy_key
         self.stock_codes = stock_codes
         self.initial_capital = initial_capital
+        self.provider_name = provider_name
         self.account_id = account_id
         self.userdata_path = userdata_path
         self.session_id = session_id
@@ -63,7 +65,7 @@ class QmtBroker(BaseBroker):
 
     @property
     def name(self) -> str:
-        return "qmt"
+        return self.provider_name
 
     def _load_xtquant(self):
         try:
