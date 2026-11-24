@@ -649,11 +649,17 @@ python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 \
 
 当前 Dashboard 可展示：
 
-- 模拟盘账户列表
-- 账户概览
-- 当前持仓
-- 待执行订单
-- 最近净值曲线
+- `paper` 模式：
+  - 模拟盘账户列表
+  - 账户概览
+  - 当前持仓
+  - 待执行订单
+  - 最近净值曲线
+- `live` 模式：
+  - live 账户概览
+  - live 持仓
+  - live 订单状态
+  - `planned / submitted / accepted / rejected / cancelled / filled` 状态展示
 
 ### 后端启动
 
@@ -669,14 +675,15 @@ uvicorn api.main:app --reload
 
 主要接口：
 
-- `GET /api/dashboard/accounts`
-- `GET /api/dashboard`
+- `GET /api/dashboard/accounts?mode=paper|live`
+- `GET /api/dashboard?mode=paper|live`
 
 说明：
 
-- Dashboard API 只读，直接复用现有 `PaperRepository`
-- 若数据库中还没有模拟盘账户，页面会显示“暂无模拟盘账户”
-- 建议先运行至少一次 `scripts/run_paper_trade.py` 创建账户后再打开 Dashboard
+- Dashboard API 只读，按 `mode` 分别复用 `PaperRepository` 和 `LiveRepository`
+- 若所选模式下数据库还没有账户，页面会显示对应的空状态提示
+- `paper` 模式建议先运行至少一次 `scripts/run_paper_trade.py`
+- `live` 模式建议先运行至少一次 `scripts/run_live_trade.py`
 
 ### 前端启动
 
@@ -702,10 +709,13 @@ VITE_API_BASE=http://127.0.0.1:8000 npm run dev
 # 1. 先确保数据库已有模拟盘账户
 python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 --capital 1000000
 
-# 2. 启后端
+# 2. 如需看 live 模式，再同步一次 live 账户
+python scripts/run_live_trade.py --strategy overnight_long --codes 513090 --capital 1000000
+
+# 3. 启后端
 uvicorn api.main:app --reload
 
-# 3. 启前端
+# 4. 启前端
 cd frontend
 npm install
 npm run dev
@@ -715,6 +725,7 @@ npm run dev
 
 - 目前只做只读 Dashboard，不包含策略管理写接口
 - 暂未实现 WebSocket，页面数据默认通过 REST 获取
+- live 模式当前不维护 NAV 历史曲线
 - 风控中心、回测中心完整页面、实时行情页仍未开始
 
 ## Phase 7A / 7B 实盘执行链
@@ -783,6 +794,29 @@ broker:
   - `qmt`：已实现 adapter，但需要真实环境联调
   - `dummy`：可继续作为 dry-run / 占位用途
 
+### live 风控配置
+
+`config/settings.yaml` 中已有 live 风控兜底专用阈值：
+
+```yaml
+risk_control:
+  live_max_single_position: 1.00
+  live_max_total_position: 1.00
+```
+
+说明：
+
+- 这两个 live 专用阈值默认先设为 `1.0`
+  - 目的是先启用 live 风控框架，但不直接改变当前策略默认仓位行为
+- 如果要正式收紧 live 风险，可单独下调
+  - 例如：
+
+```yaml
+risk_control:
+  live_max_single_position: 0.30
+  live_max_total_position: 0.80
+```
+
 ### CLI 用法
 
 `scripts/run_live_trade.py` 用于运行实盘交易基座。
@@ -798,6 +832,12 @@ broker:
 | `--params key=value ...` | 覆盖策略参数 |
 | `--mode dry_run|live` | broker 模式，默认读 `settings.yaml` |
 | `--provider NAME` | broker 提供方，默认读 `settings.yaml` |
+| `--broker-check` | 只执行 QMT / miniQMT 联调诊断，不进入策略执行 |
+| `--reconcile` | 只执行 live 本地状态与 broker 状态只读对账，不进入策略执行 |
+| `--check-order-code` | 可选：联调测试单代码 |
+| `--check-order-price` | 可选：联调测试单限价 |
+| `--check-order-volume` | 可选：联调测试单数量 |
+| `--check-order-direction` | 可选：联调测试单方向，`BUY` / `SELL` |
 
 ### 推荐使用方式（当前阶段）
 
@@ -808,6 +848,38 @@ python scripts/init_db.py --codes 513090 --start 2023-01-01
 # 2. dry-run 跑一次实盘基座（当前最推荐）
 python scripts/run_live_trade.py --strategy overnight_long --codes 513090 --capital 1000000
 ```
+
+### live rehearsal / 小资金验证
+
+当前仓库已提供 `scripts/run_live_validation.py`，用于在真实 QMT 环境就绪前先做 dry-run + paper 并行验证。
+
+示例：
+
+```bash
+python scripts/run_live_validation.py \
+  --strategy overnight_long \
+  --codes 513090 \
+  --start 2026-01-05 \
+  --end 2026-01-07 \
+  --capital 10000 \
+  --tag smoke-20260105-0107
+```
+
+说明：
+
+- 会并行运行：
+  - `PaperEngine`
+  - `LiveEngine + DryRunBroker`
+- 会使用隔离的 validation account / instance ID
+- 会输出：
+  - 每日信号数量
+  - Paper 成交数
+  - Live 建单数
+  - planned 激活数
+  - 问题日汇总，标明跳过的执行链以及信号差异或订单异常。
+- 信号一致天数以 Paper 和 Live 均完成的交易日为分母。任一侧跳过时，该日列入问题日。区间内双方从未在同一天完成时，显示“无可比较日”。
+- Paper 和 Live 的期末资产各自取该侧最近完成交易日的总资产。区间内该侧从未完成时，显示“无数据”。
+- 若同一个 `--tag` 需要重跑，可加 `--reset`
 
 示例输出会包含：
 
@@ -834,11 +906,58 @@ python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
     --mode live --provider qmt
 ```
 
+在真正跑策略前，建议先做只读联调诊断：
+
+```bash
+python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
+    --mode live --provider qmt --broker-check
+```
+
+如需检查本地 `live_*` 表与 broker 当前状态是否漂移，可执行：
+
+```bash
+python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
+    --mode live --provider qmt --reconcile
+```
+
+如需验证“最小测试单下单 / 查单 / 撤单”链路，再显式提供测试单参数：
+
+```bash
+python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
+    --mode live --provider qmt --broker-check \
+    --check-order-code 513090 \
+    --check-order-price 0.800 \
+    --check-order-volume 100 \
+    --check-order-direction BUY
+```
+
 但要满足：
 
 - 已安装 `xtquant`
 - 已有可用 QMT / miniQMT 运行环境
 - `broker.account_id`、`broker.qmt.userdata_path` 等配置完整
+
+`--broker-check` 的行为说明：
+
+- 默认只做只读检查：`xtquant` 导入、connect / subscribe、账户查询、持仓查询、订单查询
+- 只有显式提供 `--check-order-*` 参数时，才会真的提交测试单并尝试撤单
+- 为降低误成交风险，CLI 要求测试单必须提供正数限价和正数数量
+- 建议先使用明显偏离盘口的限价，再在真实环境人工确认后执行
+
+`--reconcile` 的行为说明：
+
+- 只做只读比对，不会修改本地库，也不会向 broker 提交任何请求
+- 账户维度比对：`broker_account_id / cash / total_equity / status`
+- 持仓维度比对：`code / volume / available / cost_price / current_price`
+- 订单维度比对：以 `broker_order_id` 为 key，比对请求参数、状态、成交量价、手续费
+- 本地 `planned` 且尚未拿到 `broker_order_id` 的订单会单独列为 `local planned`，不会误报成 broker 缺单
+
+`scripts/run_live_validation.py` 的行为说明：
+
+- 按交易日区间并行运行 `PaperEngine` 与 `LiveEngine(DryRunBroker)`
+- 默认生成隔离的 validation account / instance ID
+- validation 场景下会关闭 submit-window 时段限制，避免历史 rehearsal 被当前时刻误伤
+- 适合在真实小资金前先验证策略行为与 live 执行链行为
 
 当前代码已支持：
 
@@ -847,13 +966,35 @@ python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
 - 即时订单提交
 - 撤单
 - 订单查询
+- `--broker-check` 联调诊断
+- `--reconcile` live 只读对账报告
 - `next_open` 计划单到期激活链路
+- live 风控兜底：
+  - 单票最大仓位检查
+  - 总仓位上限检查
+  - 非交易时段禁止即时提交
+  - 非法价格 / 数量拦截
+  - 风控拒单写入 `live_order(status=rejected)`
 - 邮件通知：
   - 日报摘要
   - 订单提交失败
   - 计划单激活失败
 
 但由于当前开发环境没有真实 QMT 客户端，仍需你后续在真实环境完成最终联调。
+
+### 关于“小资金验证”的当前边界
+
+当前已完成的是 **代码侧 rehearsal / validation**：
+
+- 可以按日期区间跑小资金 dry-run 验证
+- 可以并行对照 paper 与 live 执行链
+- 可以输出验证报告
+
+但还 **没有** 在这台机器上完成：
+
+- 真实 QMT / miniQMT 环境的小资金下单
+- 真实成交回报验证
+- 真实券商账户资金波动验证
 
 ### 后续仍建议继续补的内容
 

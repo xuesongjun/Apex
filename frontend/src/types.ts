@@ -2,6 +2,7 @@ export interface AccountOption {
   account_id: string;
   strategy_key: string;
   stock_codes: string[];
+  mode: "paper" | "live";
   updated_at?: string | null;
   created_at?: string | null;
 }
@@ -22,6 +23,8 @@ export interface DashboardOverview {
   position_count: number;
   pending_count: number;
   latest_trade_date?: string | null;
+  broker_provider?: string | null;
+  account_status?: string | null;
 }
 
 export interface PositionItem {
@@ -47,6 +50,25 @@ export interface PendingOrderItem {
   reason: string;
 }
 
+export interface OrderItem {
+  order_id: string;
+  broker_order_id: string;
+  code: string;
+  direction: string;
+  req_volume: number;
+  req_price: number;
+  execute_at: string;
+  execute_date?: string | null;
+  signal_date: string;
+  status: string;
+  filled_volume: number;
+  filled_price: number;
+  commission: number;
+  reason: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
 export interface NavPoint {
   trade_date: string;
   total_equity: number;
@@ -57,10 +79,12 @@ export interface NavPoint {
 }
 
 export interface DashboardPayload {
+  mode: "paper" | "live";
   accounts: AccountOption[];
   selected_account_id?: string | null;
   overview?: DashboardOverview | null;
   positions: PositionItem[];
   pending_orders: PendingOrderItem[];
+  orders: OrderItem[];
   nav: NavPoint[];
 }

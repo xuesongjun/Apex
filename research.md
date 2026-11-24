@@ -4,6 +4,266 @@
 
 ---
 
+## 2026-04-24 Phase 7G（live rehearsal / 小资金验证）研究补充
+
+### 当前判断
+
+当前环境仍然缺少真实 `xtquant` / QMT 终端，因此“真实小资金验证”不能直接在这台机器完成。
+
+但仓库已经同时具备两条可以并行验证的链：
+
+- `PaperEngine`
+  - 能做真实的日级成交模拟
+- `LiveEngine + DryRunBroker`
+  - 能做真实的 live 订单生命周期落库
+
+因此更稳的下一步是先做 **live rehearsal / validation**，把“策略行为”和“live 执行链行为”放到同一时间区间里做隔离验证。
+
+### 设计结论
+
+- 新增独立脚本 `scripts/run_live_validation.py`
+  - 不修改现有 `run_live_trade.py` 生产入口语义
+- validation 账户必须和正式账户隔离
+  - 因此新增稳定的 validation ID 生成逻辑
+- validation 需要支持重复运行
+  - 因此补充按 account / instance 精确清理的 repository 方法
+- 历史 rehearsal 不应受“当前时刻必须是 open/close 窗口”限制
+  - 因此 live submit window 检查需要允许在 validation 模式关闭
+- validation 报告的重点不是伪造真实成交回报
+  - 而是输出：
+    - 信号数量是否一致
+    - live 建单 / planned 激活链是否稳定
+    - 是否出现拒单 / 风控 / 问题日
+
+### 本轮目标
+
+1. 可以按日期区间跑 live rehearsal
+2. 可以用小资金做隔离验证
+3. 可以输出日级验证报告
+4. 可以避免污染正式 paper/live 账户
+
+### 验证策略
+
+- 单元/集成测试：
+  - validation ID 稳定性
+  - validation report 汇总
+  - validation 数据清理
+- 冒烟验证：
+  - `overnight_long`
+  - `513090`
+  - `2026-01-05 ~ 2026-01-07`
+
+### 当前结论
+
+- 代码侧 live rehearsal / 小资金验证能力已落地
+- 当前环境下已完成 dry-run + paper 并行冒烟验证
+- 真实 QMT / miniQMT 小资金验证仍待真实环境执行
+
+---
+
+## 2026-04-24 Phase 7F（Web live 只读看板）研究补充
+
+### 当前判断
+
+现有 Web Dashboard 已经有一条完整的最小链：
+
+- FastAPI 只读接口
+- Vue Dashboard 页面
+- 账户切换
+- 概览卡片
+- 表格区
+
+因此增加 live 看板时，不应该再复制一套页面或新起一组完全独立的 API。
+
+### 设计结论
+
+- 继续复用 `/api/dashboard`
+  - 通过 `mode=paper|live` 切换
+- 前端继续复用 `DashboardView.vue`
+  - 增加模式切换，不新建第二个页面
+- paper 模式保持原有：
+  - 账户概览
+  - 持仓
+  - 待执行订单
+  - 净值曲线
+- live 模式新增：
+  - live 账户概览
+  - live 持仓
+  - live 订单状态表
+  - `planned / submitted / accepted / rejected / cancelled / filled` 状态展示
+- live 当前不维护 NAV 历史曲线
+  - 页面保留信息面板说明，而不是伪造曲线
+
+### 本轮目标
+
+1. API 能返回 live 账户列表
+2. API 能返回 live 概览、持仓、订单状态
+3. 前端可以切换 `paper / live`
+4. 现有 paper dashboard 行为不回退
+
+### 验证策略
+
+- 路由逻辑测试：
+  - paper 模式仍按旧逻辑返回
+  - live 模式返回 live 概览和订单状态
+- 前端验证：
+  - `npm run build` 通过
+
+---
+
+## 2026-04-24 Phase 7E（live 风控兜底）研究补充
+
+### 当前判断
+
+这项 TODO 不能只在 broker 提交前包一层简单校验，否则会留下两个问题：
+
+- BUY 被拒绝后，依赖它的 `next_open` SELL 仍可能被落库，形成孤儿 planned 单
+- `dry_run` 没有真实成交回报，计划单激活时若硬依赖 broker 持仓，会把现有 dry-run 链路全部拦死
+
+因此 live 风控必须直接接入 `LiveEngine` 的建单链和 planned 激活链。
+
+### 设计结论
+
+- 新增 `trading/live_risk.py`
+  - 负责最小 live 风控兜底
+- 风控覆盖两条路径：
+  - `_build_order_requests()`
+  - `_submit_due_planned_orders()`
+- 第一版范围只做：
+  - 单票最大仓位检查
+  - 总仓位上限检查
+  - 非交易时段禁止即时提交
+  - 非法价格 / 数量拦截
+- 风控拒绝必须持久化为 `live_order(status=rejected)`
+  - 后续 live 对账和 Web 看板才能展示
+- BUY / next_open SELL 依赖关系必须在 build 阶段处理
+  - BUY 未通过风控，则依赖它的 SELL 也要拒绝
+- live 风控阈值需要和 Phase 4 通用风控参数解耦
+  - 否则当前 `max_single_position=0.20` 会直接挡住 `overnight_long` 这类高仓位策略
+  - 因此新增 `live_max_single_position` / `live_max_total_position`
+  - 默认先设为 `1.0`
+- `dry_run` 计划单激活保留兼容路径
+  - 无真实持仓回报时，允许按 planned 数量做保守校验
+
+### 本轮目标
+
+1. live 提交前有本地风控兜底
+2. 风控拒绝可审计
+3. 不破坏既有 dry-run / planned 激活链
+4. 为后续 Web live 看板准备 rejected 原因数据
+
+### 验证策略
+
+- 集成测试：
+  - BUY 触发单票仓位超限时，BUY 和依赖的 next_open SELL 都会被拒绝
+  - 非交易时段的即时 close 单被拒绝
+- 回归测试：
+  - live trade / qmt / reconcile 现有链路继续通过
+
+---
+
+## 2026-04-24 Phase 7D（live 对账）研究补充
+
+### 当前判断
+
+现有仓库已经具备做第一版 live 对账所需的最小信息：
+
+- 本地侧：
+  - `live_account`
+  - `live_position`
+  - `live_order`
+- broker 侧：
+  - `BaseBroker.get_account()`
+  - `BaseBroker.get_positions()`
+  - `BaseBroker.list_orders()`
+
+因此这项能力不需要再改 broker 抽象，只需要增加独立的只读比对层。
+
+### 设计结论
+
+- 对账入口继续放在 `scripts/run_live_trade.py`
+  - 避免再增加一个平行 CLI
+  - 与 `--broker-check` 一样走现有 broker 构造链
+- 账户对账：
+  - 比对 `broker_account_id`
+  - 比对 `cash`
+  - 比对 `total_equity`
+  - 比对 `status`
+- 持仓对账：
+  - 以 `code` 为 key
+  - 比对 `volume / available / cost_price / current_price`
+- 订单对账：
+  - 以 `broker_order_id` 为 key
+  - 比对 `code / direction / req_volume / req_price / status / filled_* / commission`
+- 本地 `planned` 且尚未拿到 `broker_order_id` 的订单不能算“券商缺单”
+  - 应单独归类为 `local_planned_pending`
+- 第一版只做只读差异报告
+  - 不做自动修复
+  - 不反写本地库
+
+### 本轮目标
+
+1. 输出账户差异
+2. 输出持仓差异
+3. 输出订单差异
+4. 明确区分：
+   - `broker_only`
+   - `local_only`
+   - `mismatch`
+   - `local_planned_pending`
+
+### 验证策略
+
+- 一致场景：
+  - 使用 `DryRunBroker` 验证 report 为一致
+- 差异场景：
+  - 使用 fake broker 验证 account / position / order 三类差异都能正确归类
+
+---
+
+## 2026-04-24 Phase 7C（QMT 联调诊断链）研究补充
+
+### 当前阻塞
+
+当前工作区无法直接完成真实 QMT / miniQMT 联调验收，因为：
+
+- `importlib.util.find_spec("xtquant")` 返回 `None`
+- 当前机器不是已配置好的 QMT / miniQMT 终端环境
+- 因此无法在本机验证真实 connect / subscribe / 查询 / 下单 / 撤单闭环
+
+### 设计结论
+
+- 第一优先级 TODO 不能停在“等以后手工试”
+  - 需要先把联调过程产品化成可重复执行的诊断链
+- 诊断逻辑应直接复用 `QmtBroker`
+  - 避免另起一个脚本复制 connect / subscribe / query / order 逻辑
+- `scripts/run_live_trade.py` 增加 `--broker-check`
+  - 默认只做只读检查，不进入策略执行链
+  - 仅显式提供 `--check-order-*` 参数时，才执行最小测试单下单 / 查单 / 撤单
+- 测试单必须要求显式限价和正数量
+  - 避免误发 market-like 委托
+
+### 本轮目标
+
+1. 诊断 `xtquant` 导入是否成功
+2. 诊断 connect / subscribe 是否成功
+3. 输出账户 / 持仓 / 订单概览
+4. 可选执行最小测试单提交流程
+5. 用 fake `xtquant` 锁住代码逻辑
+
+### 验证策略
+
+- adapter 侧：
+  - fake `xtquant` 验证 `run_diagnostics()`
+- CLI 侧：
+  - 验证只读模式可正常返回
+  - 验证测试单参数必须完整
+- 真实环境侧：
+  - 后续在真实 QMT / miniQMT 机器执行 `run_live_trade.py --broker-check`
+  - 若需要验证测试单，再显式加 `--check-order-code/price/volume`
+
+---
+
 ## 2026-04-23 Phase 7B（QMT / miniQMT adapter）研究补充
 
 ### 当前可落地范围

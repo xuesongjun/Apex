@@ -549,34 +549,220 @@ a-stock-trading-system/
 ### Phase 7 后续 TODO（按优先级）
 
 - [ ] 在真实 QMT / miniQMT 环境完成联调：
+  - [x] 代码侧联调诊断链已补齐：`scripts/run_live_trade.py --broker-check`
   - 验证 `xtquant` 可导入
   - 验证 connect / subscribe
   - 验证账户查询
   - 验证持仓查询
   - 验证最小测试单下单 / 撤单 / 订单状态查询
-- [ ] 接入邮件通知到 live chain：
+- [x] 接入邮件通知到 live chain：
   - `run_live_trade.py` 运行摘要
   - broker 连接失败
   - 订单提交失败
   - planned 订单激活失败
-- [ ] 增加 live 对账能力：
+- [x] 增加 live 对账能力：
   - 本地 `live_account / live_position / live_order` 与券商状态只读比对
   - 输出差异报告
-- [ ] 增加 live 风控兜底：
+- [x] 增加 live 风控兜底：
   - 单票最大仓位检查
   - 总仓位上限检查
   - 非交易时段禁止提交
   - 非法价格 / 数量拦截
-- [ ] 在 Web 中增加 live 只读看板：
+- [x] 在 Web 中增加 live 只读看板：
   - live 账户概览
   - live 持仓
   - live 订单状态
   - planned / submitted / accepted / rejected / cancelled 状态展示
 - [ ] 再进入更完整的实盘策略运行与小资金验证
+  - [x] 已补 `scripts/run_live_validation.py` rehearsal / 小资金验证脚本
+  - [x] 已完成 dry-run + paper 并行冒烟验证
+  - [ ] 真实 QMT / miniQMT 小资金验证待真实环境执行
 
 ---
 
 ## 9. 迭代日志
+
+### 2026-04-24 — Phase 7G（live rehearsal / 小资金验证）推进
+
+**目标**：在无法直接接真实 QMT 小资金的前提下，先补齐代码侧 live rehearsal / validation 能力。
+
+**关联研究**：见 `research.md` → "2026-04-24 Phase 7G（live rehearsal / 小资金验证）研究补充"
+
+**开发线路图**：
+
+- [x] 节点1：确认采用 `PaperEngine + LiveEngine(DryRunBroker)` 并行验证
+- [x] 节点2：新增 validation ID 与隔离状态清理能力
+- [x] 节点3：新增 `scripts/run_live_validation.py`
+- [x] 节点4：关闭 validation 场景下的 submit-window 限制
+- [x] 节点5：完成单测与冒烟验证
+
+**本轮范围**：
+
+| 模块 | 范围 |
+|------|------|
+| Validation | 新增 `trading/live_validation.py` |
+| CLI | 新增 `scripts/run_live_validation.py` |
+| Repository | 新增 validation 状态清理方法 |
+| 测试 | validation ID / 汇总 / 清理测试 |
+
+**不做**：
+
+- 真实 QMT 成交回报模拟
+- 自动比对逐笔成交
+- 真实小资金下单
+- 自动清理正式账户
+
+**当前结论**：
+
+1. 代码侧 live rehearsal / 小资金验证能力已落地
+2. 当前环境下已完成 `overnight_long 513090 2026-01-05~2026-01-07` 冒烟验证
+3. 冒烟结果显示 3/3 交易日信号一致，live 建单和 planned 激活链可连续运行
+4. 真实 QMT / miniQMT 小资金验证仍待联调环境执行
+
+### 2026-04-24 — Phase 7F（Web live 只读看板）推进
+
+**目标**：在现有 Dashboard 最小闭环上补 live 只读看板，而不是再造第二套 Web 页面。
+
+**关联研究**：见 `research.md` → "2026-04-24 Phase 7F（Web live 只读看板）研究补充"
+
+**开发线路图**：
+
+- [x] 节点1：确认复用现有 `/api/dashboard` 与 `DashboardView.vue`
+- [x] 节点2：后端增加 `mode=paper|live` 双模式只读接口
+- [x] 节点3：前端增加 paper/live 模式切换
+- [x] 节点4：展示 live 账户概览、持仓和订单状态
+- [x] 节点5：确认 paper 模式不回退
+
+**本轮范围**：
+
+| 模块 | 范围 |
+|------|------|
+| API | `/api/dashboard` 支持 `paper/live` 双模式 |
+| Frontend | `DashboardView.vue` 支持模式切换和 live 订单状态表 |
+| 测试 | dashboard 路由逻辑测试 + 前端 build |
+
+**不做**：
+
+- live 写接口
+- live NAV 历史曲线
+- Web 侧实盘下单
+- 风控中心页面
+
+**当前结论**：
+
+1. Web live 只读看板已落地
+2. paper/live 共用一套 API 和页面，维护成本更低
+3. live 订单状态已能展示 `planned / submitted / accepted / rejected / cancelled / filled`
+4. dashboard 路由测试、前端 build 和全量 `pytest -q` 均已通过
+5. 下一项 TODO 可以进入更完整的实盘策略运行与小资金验证
+
+### 2026-04-24 — Phase 7E（live 风控兜底）推进
+
+**目标**：在 live 提交链路中增加最小可用的本地风控兜底，并保证 rejected 结果可审计。
+
+**关联研究**：见 `research.md` → "2026-04-24 Phase 7E（live 风控兜底）研究补充"
+
+**开发线路图**：
+
+- [x] 节点1：识别 build/request 与 planned 激活两条提交路径
+- [x] 节点2：新增 `LiveRiskGuard` 处理仓位、时段、量价检查
+- [x] 节点3：将风控拒绝持久化到 `live_order`
+- [x] 节点4：覆盖仓位超限和非交易时段拒单集成测试
+- [x] 节点5：确认不破坏 dry-run / qmt / reconcile 现有链路
+
+**本轮范围**：
+
+| 模块 | 范围 |
+|------|------|
+| Live Risk | 新增 `trading/live_risk.py` |
+| Live Engine | build 阶段和 planned 激活阶段接入风控 |
+| Config | 新增 `risk_control.live_max_single_position/live_max_total_position` |
+| 测试 | 风控拒单回归测试 |
+
+**不做**：
+
+- 止损止盈
+- 回撤控制
+- 自动减仓或自动修复
+- 风控中心 Web 页面
+
+**当前结论**：
+
+1. live 最小风控兜底已落地
+2. 风控拒单会落 `live_order(status=rejected)`，后续可用于对账和 Web 展示
+3. `dry_run` 计划单激活链保持兼容
+4. 下一项 TODO 可以进入 Web live 只读看板
+
+### 2026-04-24 — Phase 7D（live 对账）推进
+
+**目标**：补齐 live 本地状态与 broker 状态的第一版只读对账能力，作为进入 live 风控前的基础设施。
+
+**关联研究**：见 `research.md` → "2026-04-24 Phase 7D（live 对账）研究补充"
+
+**开发线路图**：
+
+- [x] 节点1：确认现有 live 表和 broker 抽象已足够支撑只读对账
+- [x] 节点2：实现账户 / 持仓 / 订单三类对账报告
+- [x] 节点3：将对账入口接入 `run_live_trade.py --reconcile`
+- [x] 节点4：覆盖一致场景与差异场景测试
+- [ ] 节点5：在真实 QMT / miniQMT 环境跑一次实单前对账
+
+**本轮范围**：
+
+| 模块 | 范围 |
+|------|------|
+| Reconcile | 新增 `trading/live_reconcile.py`，对比 `live_account / live_position / live_order` 与 broker 状态 |
+| CLI | `scripts/run_live_trade.py` 新增 `--reconcile` |
+| 测试 | 一致场景 + 差异场景对账测试 |
+
+**不做**：
+
+- 自动修复本地状态
+- 成交回报回写
+- Web live 看板
+- live 风控拦截
+
+**当前结论**：
+
+1. 第一版 live 只读对账能力已落地
+2. `planned` 且尚未拿到 `broker_order_id` 的订单会单独归类，不再误报券商缺单
+3. 对账相关回归已通过，且全量 `pytest -q` 通过
+4. 下一项 TODO 可以直接进入 live 风控兜底
+
+### 2026-04-24 — Phase 7C（QMT 联调诊断链）推进
+
+**目标**：把 Phase 7 第一优先级 TODO 从“依赖手工试错”推进到“可执行、可回归的联调诊断链”。
+
+**关联研究**：见 `research.md` → "2026-04-24 Phase 7C（QMT 联调诊断链）研究补充"
+
+**开发线路图**：
+
+- [x] 节点1：确认当前环境 blocker（`xtquant` 缺失）
+- [x] 节点2：在 `QmtBroker` 内增加统一诊断入口
+- [x] 节点3：在 CLI 增加 `--broker-check` 与可选测试单参数
+- [x] 节点4：补 fake `xtquant` / CLI helper 回归测试
+- [ ] 节点5：在真实 QMT / miniQMT 环境完成最终验收
+
+**本轮范围**：
+
+| 模块 | 范围 |
+|------|------|
+| QMT Adapter | 新增 `run_diagnostics()`，复用现有 connect / subscribe / query / submit / cancel 能力 |
+| CLI | `scripts/run_live_trade.py` 新增 `--broker-check` 和 `--check-order-*` |
+| 测试 | 诊断流程回归测试 + CLI 参数校验测试 |
+
+**不做**：
+
+- 在当前机器伪造真实联机成功
+- 成交回报 callback 持久化
+- live 对账
+- live 风控拦截
+
+**当前结论**：
+
+1. 代码侧联调命令已具备
+2. fake `xtquant` 回归测试通过，且全量 `pytest -q` 通过
+3. 当前开发环境仍缺少 `xtquant`，真实联调验收待真实环境执行
 
 ### 2026-04-23 — Phase 7B（QMT / miniQMT adapter）推进
 
@@ -955,3 +1141,11 @@ a-stock-trading-system/
 ---
 
 *文档版本：v1.1 | 创建日期：2026-03-17 | 最后更新：2026-04-19*
+
+## 2026-11-25 演练报告识别跳过交易日（已归档）
+
+回归用例复现了修复前的行为。Paper 与 Live 都返回空摘要时，旧版汇总会把该日计为零信号一致日。
+
+- [提案](openspec/changes/archive/2026-11-25-fix-live-validation-skipped-days/proposal.md)说明变更范围，[增量规格](openspec/changes/archive/2026-11-25-fix-live-validation-skipped-days/specs/live-validation-reporting/spec.md)列出可验证行为。
+- [设计](openspec/changes/archive/2026-11-25-fix-live-validation-skipped-days/design.md)列出受影响文件和报告兼容性，[任务清单](openspec/changes/archive/2026-11-25-fix-live-validation-skipped-days/tasks.md)列出回归测试及集成验收步骤。
+- 已完成实现和集成验收。全量 45 项测试通过，变更及[主规格](openspec/specs/live-validation-reporting/spec.md)均通过 OpenSpec 严格校验。

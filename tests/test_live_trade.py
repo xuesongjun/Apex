@@ -1,14 +1,14 @@
 """
 Phase 7A 实盘交易基座测试
 """
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 
-from config import DatabaseConfig
+from config import DatabaseConfig, RiskControlConfig
 from data.models import init_db
 from data.storage.repository import LiveRepository
-from strategy.base import Direction
+from strategy.base import BarData, BaseStrategy, Direction, Signal
 from strategy.technical.overnight_long import OvernightLongStrategy
 from trading.broker.base import BrokerOrderRequest
 from trading.broker.dry_run import DryRunBroker
@@ -42,6 +42,23 @@ class FakeStockRepository:
 
     def is_trade_date(self, check_date: date) -> bool:
         return check_date in self._trade_dates
+
+
+class OneShotCloseBuyStrategy(BaseStrategy):
+    @property
+    def name(self) -> str:
+        return "one_shot_close_buy"
+
+    def on_bar(self, bar: BarData) -> list[Signal]:
+        return [
+            Signal(
+                code=bar.code,
+                direction=Direction.BUY,
+                trade_date=bar.trade_date,
+                execute_at="close",
+                reason="close-buy",
+            )
+        ]
 
 
 def make_bars() -> dict[str, list[dict]]:
@@ -249,3 +266,91 @@ def test_live_engine_notifies_when_activation_fails_due_to_missing_bar(tmp_path,
     subject, body = notifier.messages[0]
     assert "Activation Failed" in subject
     assert "000001" in body
+
+
+def test_live_engine_rejects_buy_and_dependent_next_open_sell_when_risk_limit_exceeded(tmp_path, monkeypatch):
+    setup_temp_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(RiskControlConfig, "live_max_single_position", 0.10)
+    monkeypatch.setattr(RiskControlConfig, "live_max_total_position", 0.80)
+
+    broker = DryRunBroker(
+        instance_id="overnight_long:test",
+        strategy_key="overnight_long",
+        stock_codes=["513090"],
+        initial_capital=10_000.0,
+    )
+    engine = LiveEngine(
+        strategy=OvernightLongStrategy(),
+        strategy_key="overnight_long",
+        stock_codes=["513090"],
+        broker=broker,
+        instance_id="overnight_long:test",
+        run_date=date(2026, 1, 5),
+    )
+    engine._repo = FakeStockRepository(make_bars())
+
+    summary = engine.run_daily()
+
+    rows = LiveRepository().get_live_orders("overnight_long:test")
+
+    assert summary["orders_built"] == 0
+    assert summary["orders_submitted"] == 0
+    assert summary["orders_risk_rejected"] == 2
+    assert summary["orders_rejected"] == 2
+    assert len(rows) == 2
+    assert all(row.status == "rejected" for row in rows)
+    reasons = [row.reason for row in rows]
+    assert any("单票仓位超限" in reason for reason in reasons)
+    assert any("依赖的买入单未通过 live 风控" in reason for reason in reasons)
+
+
+def test_live_engine_rejects_immediate_close_order_outside_trading_window(tmp_path, monkeypatch):
+    setup_temp_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(RiskControlConfig, "live_max_single_position", 1.0)
+    monkeypatch.setattr(RiskControlConfig, "live_max_total_position", 1.0)
+
+    today = date.today()
+    bars = {
+        "513090": [
+            {
+                "trade_date": today,
+                "open": 1.00,
+                "high": 1.06,
+                "low": 0.99,
+                "close": 1.05,
+                "pre_close": 1.00,
+                "volume": 1_000_000,
+                "amount": 1_050_000.0,
+                "turnover": 0.0,
+                "pct_change": 5.0,
+            }
+        ]
+    }
+
+    broker = DryRunBroker(
+        instance_id="one_shot_close_buy:test",
+        strategy_key="one_shot_close_buy",
+        stock_codes=["513090"],
+        initial_capital=10_000.0,
+    )
+    engine = LiveEngine(
+        strategy=OneShotCloseBuyStrategy(),
+        strategy_key="one_shot_close_buy",
+        stock_codes=["513090"],
+        broker=broker,
+        instance_id="one_shot_close_buy:test",
+        run_date=today,
+        current_dt=datetime.combine(today, datetime.min.time()).replace(hour=13, minute=0),
+    )
+    engine._repo = FakeStockRepository(bars)
+
+    summary = engine.run_daily()
+
+    rows = LiveRepository().get_live_orders("one_shot_close_buy:test")
+
+    assert summary["orders_built"] == 0
+    assert summary["orders_submitted"] == 0
+    assert summary["orders_risk_rejected"] == 1
+    assert len(rows) == 1
+    assert rows[0].status == "rejected"
+    assert "非交易时段禁止提交 close 委托" in rows[0].reason

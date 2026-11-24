@@ -85,6 +85,8 @@ class RiskControlConfig:
     take_profit_pct: float = _rc.get("take_profit_pct", 0.20)
     max_daily_loss: float = _rc.get("max_daily_loss", -0.03)
     max_drawdown: float = _rc.get("max_drawdown", -0.10)
+    live_max_single_position: float = _rc.get("live_max_single_position", 1.00)
+    live_max_total_position: float = _rc.get("live_max_total_position", 1.00)
 
 
 # ========== 回测配置 ==========
