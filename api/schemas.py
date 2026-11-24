@@ -12,6 +12,7 @@ class AccountOption(BaseModel):
     account_id: str
     strategy_key: str
     stock_codes: list[str]
+    mode: str = "paper"
     updated_at: datetime | None = None
     created_at: datetime | None = None
 
@@ -32,6 +33,8 @@ class DashboardOverview(BaseModel):
     position_count: int
     pending_count: int
     latest_trade_date: date | None = None
+    broker_provider: str | None = None
+    account_status: str | None = None
 
 
 class PositionItem(BaseModel):
@@ -57,6 +60,25 @@ class PendingOrderItem(BaseModel):
     reason: str
 
 
+class OrderItem(BaseModel):
+    order_id: str
+    broker_order_id: str = ""
+    code: str
+    direction: str
+    req_volume: int
+    req_price: float
+    execute_at: str
+    execute_date: date | None = None
+    signal_date: date
+    status: str
+    filled_volume: int = 0
+    filled_price: float = 0.0
+    commission: float = 0.0
+    reason: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class NavPoint(BaseModel):
     trade_date: date
     total_equity: float
@@ -67,9 +89,11 @@ class NavPoint(BaseModel):
 
 
 class DashboardPayload(BaseModel):
+    mode: str = "paper"
     accounts: list[AccountOption]
     selected_account_id: str | None = None
     overview: DashboardOverview | None = None
     positions: list[PositionItem] = []
     pending_orders: list[PendingOrderItem] = []
+    orders: list[OrderItem] = []
     nav: list[NavPoint] = []

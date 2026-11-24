@@ -1,6 +1,30 @@
+[2026-11-25 00:40] feat 接入实盘演练并修正跳过日统计
+- 改动文件：README.md, api/dependencies.py, api/routers/dashboard.py, api/schemas.py, config/__init__.py, config/settings.yaml, data/storage/repository.py, frontend/src/api/dashboard.ts, frontend/src/types.ts, frontend/src/views/DashboardView.vue, openspec/, plan.md, process.txt, research.md, scripts/run_live_trade.py, scripts/run_live_validation.py, tests/test_api_dashboard.py, tests/test_live_reconcile.py, tests/test_live_trade.py, tests/test_live_trade_cli.py, tests/test_live_validation.py, tests/test_qmt_broker.py, trading/broker/qmt_broker.py, trading/live_engine.py, trading/live_reconcile.py, trading/live_risk.py, trading/live_validation.py
+- 改动说明：提交实盘诊断、对账、风控、只读看板和演练，归档演练报告规范并补充回归测试。
+
 [2026-11-25 00:39] fix 恢复前端生产构建入口
 - 改动文件：.gitignore, frontend/index.html
 - 改动说明：跟踪 Vite HTML 入口，使干净检出可以运行前端生产构建。
+
+[2026-04-24 22:11] feat 增加 live rehearsal / 小资金验证脚本
+- 改动文件：data/storage/repository.py, trading/live_risk.py, trading/live_engine.py, trading/live_validation.py, scripts/run_live_validation.py, tests/test_live_validation.py, README.md, research.md, plan.md, process.txt
+- 改动说明：继续按 TODO 顺序推进“更完整的实盘策略运行与小资金验证”，但当前环境仍缺少真实 `xtquant` / QMT，因此先把代码侧 rehearsal 能力落地。新增 `trading/live_validation.py`，提供 validation ID 生成、日级汇总和区间报告聚合；新增 `scripts/run_live_validation.py`，按交易日区间并行运行 `PaperEngine` 与 `LiveEngine(DryRunBroker)`，输出每日信号、Paper 成交、Live 建单、planned 激活和问题日汇总，适合作为小资金前的 rehearsal。为避免污染正式账户，新增 `PaperRepository.delete_paper_account_state()` 和 `LiveRepository.delete_live_instance_state()` 做 validation 状态隔离清理。考虑到历史 rehearsal 不应受“当前时刻必须是 open/close 窗口”限制，本轮为 `LiveRiskGuard` / `LiveEngine` 增加了 `enforce_submit_window` 开关，并在 validation 场景关闭。新增 `tests/test_live_validation.py` 覆盖 validation ID 稳定性、报告汇总和 validation 数据清理。验证结果：`pytest -q tests/test_live_validation.py tests/test_live_trade.py tests/test_live_reconcile.py tests/test_live_trade_cli.py tests/test_qmt_broker.py tests/test_api_dashboard.py` 为 22 passed；冒烟执行 `python scripts/run_live_validation.py --strategy overnight_long --codes 513090 --start 2026-01-05 --end 2026-01-07 --capital 10000 --tag smoke-20260105-0107 --reset` 成功，报告显示 3/3 交易日信号一致、Live 建单连续、planned 激活正常。
+
+[2026-04-24 21:36] feat 增加 Web live 只读看板
+- 改动文件：api/dependencies.py, api/schemas.py, api/routers/dashboard.py, frontend/src/api/dashboard.ts, frontend/src/types.ts, frontend/src/views/DashboardView.vue, tests/test_api_dashboard.py, README.md, research.md, plan.md, process.txt
+- 改动说明：继续按 TODO 顺序推进 Web live 只读看板，但不再起第二套页面或第二组独立 API，而是直接扩展现有 Dashboard 最小闭环。后端将 `/api/dashboard` 和 `/api/dashboard/accounts` 扩展为 `mode=paper|live` 双模式：`paper` 仍返回账户概览、持仓、待执行订单与 NAV 曲线；`live` 返回 live 账户概览、持仓和完整订单状态列表，并把 `planned / submitted / accepted / rejected / cancelled / filled` 全部暴露给前端展示。前端 `DashboardView.vue` 新增 `paper/live` 模式切换，保留 paper 原有体验，同时在 live 模式下展示账户快照、live 持仓和订单状态表；live 当前不维护 NAV 历史曲线，因此页面显式显示说明而不是伪造图表。新增/扩展 `tests/test_api_dashboard.py` 覆盖 live 账户列表和 live dashboard 返回结构；前端 `npm run build` 通过。验证结果：`pytest -q tests/test_api_dashboard.py` 为 6 passed，`cd frontend && npm run build` 通过，随后全量 `pytest -q` 为 37 passed。
+
+[2026-04-24 21:03] feat 增加 live 风控兜底
+- 改动文件：config/settings.yaml, config/__init__.py, trading/live_risk.py, trading/live_engine.py, scripts/run_live_trade.py, tests/test_live_trade.py, README.md, research.md, plan.md, process.txt
+- 改动说明：继续按 TODO 顺序推进 live 风控兜底。新增 `trading/live_risk.py`，实现 live 最小风控守卫：单票最大仓位、总仓位上限、非交易时段禁止即时提交、非法价格 / 数量拦截。`LiveEngine` 在两条提交路径接入该守卫：一是在 `_build_order_requests()` 阶段过滤并持久化 rejected 订单，二是在 `_submit_due_planned_orders()` 激活 planned 订单时再次校验，确保风控覆盖到计划单激活链。为避免 BUY 被拦截后仍落依赖它的 next_open SELL 孤儿单，建单阶段改为先评估 BUY，再决定是否生成依赖的 SELL；同时风控拒绝会写入 `live_order(status=rejected)`，便于后续对账和 Web 展示。考虑到当前项目中的通用 `risk_control.max_single_position=0.20` 会直接挡住 `overnight_long` 这类高仓位策略，本轮新增 `risk_control.live_max_single_position` / `live_max_total_position`，默认值设为 `1.0`，先启用风控框架但不改变既有策略默认行为。为保持 `dry_run` 兼容，planned 卖单次日激活时在无真实成交回报的场景下允许按 planned 数量进行保守校验。新增集成测试覆盖仓位超限拒单和非交易时段拒单。验证结果：`pytest -q tests/test_live_trade.py tests/test_live_reconcile.py tests/test_live_trade_cli.py tests/test_qmt_broker.py` 为 13 passed。
+
+[2026-04-24 21:03] feat 增加 live 只读对账能力
+- 改动文件：trading/live_reconcile.py, scripts/run_live_trade.py, tests/test_live_reconcile.py, README.md, research.md, plan.md, process.txt
+- 改动说明：继续按 TODO 顺序推进 Phase 7 的 live 对账能力。新增 `trading/live_reconcile.py`，对单个策略实例执行账户 / 持仓 / 订单三类只读对账：账户比对 `broker_account_id/cash/total_equity/status`，持仓以 `code` 为 key 比对 `volume/available/cost_price/current_price`，订单以 `broker_order_id` 为 key 比对请求量价、状态、成交量价和手续费。对于本地 `planned` 且尚未拿到 `broker_order_id` 的订单，单独归类为 `local_planned_pending`，避免误报 broker 缺单。`scripts/run_live_trade.py` 新增 `--reconcile` 入口，用于直接打印 live 对账报告，不进入策略执行链，也不会向 broker 提交任何请求。新增 `tests/test_live_reconcile.py`，覆盖本地与 broker 一致场景，以及 account / position / order 三类差异归类场景。验证结果：`pytest -q tests/test_live_reconcile.py tests/test_live_trade_cli.py tests/test_qmt_broker.py tests/test_live_trade.py` 为 11 passed，随后全量 `pytest -q` 为 33 passed。
+
+[2026-04-24 11:44] feat 增加 QMT 联调诊断 CLI
+- 改动文件：trading/broker/qmt_broker.py, scripts/run_live_trade.py, tests/test_qmt_broker.py, tests/test_live_trade_cli.py, README.md, research.md, plan.md, process.txt
+- 改动说明：按 Phase 7 当前第一优先级 TODO 继续推进真实 QMT / miniQMT 联调，但当前开发环境缺少 `xtquant`，无法直接完成最终验收，因此先把联调流程产品化。新增 `QmtBroker.run_diagnostics()`，统一复用现有 adapter 的 `xtquant` 导入、connect / subscribe、账户查询、持仓查询、订单列表查询，以及显式启用时的最小测试单提交 / 状态查询 / 撤单能力；`scripts/run_live_trade.py` 新增 `--broker-check` 与 `--check-order-*` 参数，默认只做只读诊断，不进入策略执行链，只有显式提供测试单参数时才会真实下单。新增 `tests/test_qmt_broker.py` 诊断流程回归和 `tests/test_live_trade_cli.py` 参数校验测试；`README.md`、`research.md`、`plan.md` 同步记录了新的联调方式与当前 blocker。验证结果：`pytest -q tests/test_qmt_broker.py tests/test_live_trade_cli.py tests/test_live_trade.py` 为 9 passed，随后全量 `pytest -q` 为 31 passed。
 
 [2026-04-24 00:10] test 增加 Dashboard API 路由逻辑测试
 - 改动文件：tests/test_api_dashboard.py, process.txt

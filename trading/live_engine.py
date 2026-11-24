@@ -9,7 +9,7 @@ Phase 7A 目标：
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from loguru import logger
@@ -19,6 +19,7 @@ from data.storage.repository import LiveRepository, StockRepository
 from notification import Notifier
 from strategy.base import BarData, BaseStrategy, Direction, Position, Signal
 from trading.broker import BaseBroker, BrokerOrderRequest, BrokerPosition
+from trading.live_risk import LiveRiskGuard
 
 _LOOKBACK_DAYS = 120
 
@@ -33,6 +34,8 @@ class LiveEngine:
         strategy_key: Optional[str] = None,
         notifier: Optional[Notifier] = None,
         run_date: Optional[date] = None,
+        current_dt: Optional[datetime] = None,
+        enforce_submit_window: bool = True,
     ):
         self.strategy = strategy
         self.strategy_key = strategy_key or strategy.name
@@ -41,6 +44,8 @@ class LiveEngine:
         self.instance_id = instance_id
         self.notifier = notifier
         self.run_date = run_date or date.today()
+        self.current_dt = current_dt or datetime.now()
+        self.enforce_submit_window = enforce_submit_window
 
         self._repo = StockRepository()
         self._live_repo = LiveRepository()
@@ -62,10 +67,22 @@ class LiveEngine:
             logger.warning(f"{run_date} 所有标的均无行情数据，跳过")
             return {}
 
-        activation_result = self._submit_due_planned_orders(run_date, bar_map)
-
         broker_account = self.broker.get_account()
         broker_positions = self.broker.get_positions()
+        risk_guard = LiveRiskGuard(
+            total_equity=broker_account.total_equity,
+            cash=broker_account.cash,
+            positions=broker_positions,
+            run_date=run_date,
+            current_dt=self.current_dt,
+            enforce_submit_window=self.enforce_submit_window,
+        )
+
+        activation_result = self._submit_due_planned_orders(
+            run_date=run_date,
+            bar_map=bar_map,
+            risk_guard=risk_guard,
+        )
         self._sync_live_snapshot(broker_account, broker_positions)
 
         self._rebuild_bar_history(run_date)
@@ -83,16 +100,17 @@ class LiveEngine:
             self.strategy._update_bar(bar)
             signals.extend(self.strategy.on_bar(bar))
 
-        requests = self._build_order_requests(
+        requests, risk_rejected = self._build_order_requests(
             signals=signals,
             bar_map=bar_map,
             positions=broker_positions,
             available_cash=broker_account.cash,
             signal_date=run_date,
+            risk_guard=risk_guard,
         )
 
         submitted = 0
-        rejected = 0
+        broker_rejected = 0
         for request in requests:
             try:
                 order = self.broker.submit_order(request)
@@ -119,7 +137,7 @@ class LiveEngine:
                         f"原因: {e}\n"
                     ),
                 )
-                rejected += 1
+                broker_rejected += 1
 
         summary = {
             "run_date": run_date,
@@ -131,14 +149,17 @@ class LiveEngine:
             "signals_generated": len(signals),
             "orders_built": len(requests),
             "orders_submitted": submitted,
-            "orders_rejected": rejected,
+            "orders_rejected": risk_rejected + broker_rejected,
+            "orders_risk_rejected": risk_rejected,
+            "orders_broker_rejected": broker_rejected,
             "cash": broker_account.cash,
             "total_equity": broker_account.total_equity,
             "position_count": len(broker_positions),
         }
         logger.info(
             f"实盘基座运行完成 | 信号 {len(signals)} 个 | "
-            f"委托 {len(requests)} 笔 | 成功 {submitted} | 拒绝 {rejected} | "
+            f"委托 {len(requests)} 笔 | 成功 {submitted} | "
+            f"风控拦截 {risk_rejected} | broker失败 {broker_rejected} | "
             f"计划单激活 {activation_result['submitted']}/{activation_result['total']}"
         )
         return summary
@@ -147,6 +168,7 @@ class LiveEngine:
         self,
         run_date: date,
         bar_map: dict[str, BarData],
+        risk_guard: LiveRiskGuard,
     ) -> dict:
         due_orders = self._live_repo.get_due_live_orders(self.instance_id, run_date)
         result = {"total": len(due_orders), "submitted": 0, "rejected": 0}
@@ -189,8 +211,29 @@ class LiveEngine:
                 reason=row.reason or "",
             )
 
+            position_available = risk_guard.get_available(row.code)
+            if position_available <= 0 and self.broker.name == "dry_run":
+                position_available = int(row.req_volume or 0)
+            reference_price = req_price if req_price > 0 else bar.open
+            valid, reason = risk_guard.validate(
+                request=request,
+                reference_price=reference_price,
+                position_available=position_available,
+            )
+            if not valid:
+                self._live_repo.update_live_order(
+                    order_id=row.order_id,
+                    status="rejected",
+                    broker_order_id=row.broker_order_id or "",
+                    reason=reason,
+                )
+                logger.warning(f"live 风控拦截计划单激活 {row.code}: {reason}")
+                result["rejected"] += 1
+                continue
+
             try:
                 self.broker.submit_order(request)
+                risk_guard.apply(request, reference_price)
                 result["submitted"] += 1
             except Exception as e:
                 self._live_repo.update_live_order(
@@ -317,11 +360,11 @@ class LiveEngine:
         positions: list[BrokerPosition],
         available_cash: float,
         signal_date: date,
-    ) -> list[BrokerOrderRequest]:
+        risk_guard: LiveRiskGuard,
+    ) -> tuple[list[BrokerOrderRequest], int]:
         pos_map = {p.code: p for p in positions}
         sell_signals = [s for s in signals if s.direction == Direction.SELL]
         buy_signals = [s for s in signals if s.direction == Direction.BUY]
-        ordered_signals = sell_signals + buy_signals
         planned_buy_volumes = self._estimate_buy_volumes(
             buy_signals=buy_signals,
             bar_map=bar_map,
@@ -329,7 +372,26 @@ class LiveEngine:
         )
 
         requests: list[BrokerOrderRequest] = []
-        for signal in ordered_signals:
+        risk_rejected = 0
+        approved_buy_volumes: dict[str, int] = {}
+        deferred_sell_signals: list[tuple[Signal, int]] = []
+
+        def build_request(signal: Signal, volume: int, planned_execute_date: Optional[date], req_price: float) -> BrokerOrderRequest:
+            return BrokerOrderRequest(
+                order_id=uuid.uuid4().hex,
+                instance_id=self.instance_id,
+                strategy_key=self.strategy_key,
+                code=signal.code,
+                direction=signal.direction,
+                signal_date=signal_date,
+                execute_at=signal.execute_at,
+                planned_execute_date=planned_execute_date,
+                price=req_price,
+                volume=volume,
+                reason=signal.reason or "",
+            )
+
+        for signal in sell_signals:
             bar = bar_map.get(signal.code)
             if bar is None:
                 continue
@@ -351,32 +413,104 @@ class LiveEngine:
             if volume <= 0:
                 continue
 
-            if signal.direction == Direction.SELL:
-                pos = pos_map.get(signal.code)
-                available = pos.available if pos else 0
-                if available <= 0 and signal.execute_at == "next_open":
-                    available = planned_buy_volumes.get(signal.code, 0)
-                if available <= 0 or volume > available:
-                    continue
-                if not TradingRules.is_valid_sell_volume(volume, available):
-                    continue
+            pos = pos_map.get(signal.code)
+            available = pos.available if pos else 0
+            if available <= 0 and signal.execute_at == "next_open":
+                fallback_volume = planned_buy_volumes.get(signal.code, 0)
+                if fallback_volume > 0:
+                    deferred_sell_signals.append((signal, fallback_volume))
+                continue
+            if available <= 0 or volume > available:
+                continue
+            if not TradingRules.is_valid_sell_volume(volume, available):
+                continue
 
-            requests.append(
-                BrokerOrderRequest(
-                    order_id=uuid.uuid4().hex,
-                    instance_id=self.instance_id,
-                    strategy_key=self.strategy_key,
-                    code=signal.code,
-                    direction=signal.direction,
-                    signal_date=signal_date,
-                    execute_at=signal.execute_at,
-                    planned_execute_date=planned_execute_date,
-                    price=req_price,
-                    volume=volume,
-                    reason=signal.reason or "",
-                )
+            request = build_request(signal, volume, planned_execute_date, req_price)
+            reference_price = self._resolve_risk_reference_price(request, bar)
+            valid, reason = risk_guard.validate(
+                request=request,
+                reference_price=reference_price,
+                position_available=available,
             )
-        return requests
+            if not valid:
+                self._save_rejected_order(request, reason)
+                logger.warning(f"live 风控拦截 {request.code} {request.direction.value}: {reason}")
+                risk_rejected += 1
+                continue
+            requests.append(request)
+            risk_guard.apply(request, reference_price)
+
+        for signal in buy_signals:
+            bar = bar_map.get(signal.code)
+            if bar is None:
+                continue
+
+            planned_execute_date = (
+                self._next_trade_date(signal_date)
+                if signal.execute_at == "next_open"
+                else signal_date
+            )
+            req_price = self._resolve_price(signal, bar)
+            volume = self._resolve_volume(
+                signal,
+                bar,
+                pos_map,
+                available_cash,
+                planned_buy_volumes=planned_buy_volumes,
+            )
+            if volume <= 0:
+                continue
+
+            request = build_request(signal, volume, planned_execute_date, req_price)
+            reference_price = self._resolve_risk_reference_price(request, bar)
+            valid, reason = risk_guard.validate(
+                request=request,
+                reference_price=reference_price,
+            )
+            if not valid:
+                self._save_rejected_order(request, reason)
+                logger.warning(f"live 风控拦截 {request.code} {request.direction.value}: {reason}")
+                risk_rejected += 1
+                continue
+            requests.append(request)
+            approved_buy_volumes[request.code] = approved_buy_volumes.get(request.code, 0) + request.volume
+            risk_guard.apply(request, reference_price)
+
+        for signal, fallback_volume in deferred_sell_signals:
+            bar = bar_map.get(signal.code)
+            if bar is None:
+                continue
+
+            approved_volume = approved_buy_volumes.get(signal.code, 0)
+            planned_execute_date = self._next_trade_date(signal_date)
+            req_price = self._resolve_price(signal, bar)
+            request = build_request(
+                signal,
+                approved_volume or fallback_volume,
+                planned_execute_date,
+                req_price,
+            )
+
+            if approved_volume <= 0:
+                reason = "依赖的买入单未通过 live 风控"
+                self._save_rejected_order(request, reason)
+                logger.warning(f"live 风控拦截 {request.code} {request.direction.value}: {reason}")
+                risk_rejected += 1
+                continue
+
+            valid, reason = risk_guard.validate(
+                request=request,
+                reference_price=self._resolve_risk_reference_price(request, bar),
+                position_available=approved_volume,
+            )
+            if not valid:
+                self._save_rejected_order(request, reason)
+                logger.warning(f"live 风控拦截 {request.code} {request.direction.value}: {reason}")
+                risk_rejected += 1
+                continue
+            requests.append(request)
+
+        return requests, risk_rejected
 
     def _estimate_buy_volumes(
         self,
@@ -440,6 +574,18 @@ class LiveEngine:
             return planned_buy_volumes.get(signal.code, 0)
         return 0
 
+    def _resolve_risk_reference_price(self, request: BrokerOrderRequest, bar: BarData) -> float:
+        if request.price > 0:
+            return request.price
+        if request.execute_at == "close":
+            return round(bar.close, 3)
+        if request.execute_at in {"open", "next_open"}:
+            if bar.open > 0:
+                return round(bar.open, 3)
+            if bar.close > 0:
+                return round(bar.close, 3)
+        return 0.0
+
     def _next_trade_date(self, current_date: date) -> Optional[date]:
         check = current_date + timedelta(days=1)
         for _ in range(30):
@@ -447,6 +593,36 @@ class LiveEngine:
                 return check
             check += timedelta(days=1)
         return None
+
+    def _save_rejected_order(self, request: BrokerOrderRequest, reason: str) -> None:
+        existing = self._live_repo.get_live_order(request.order_id)
+        if existing is None:
+            self._live_repo.save_live_order(
+                {
+                    "order_id": request.order_id,
+                    "instance_id": request.instance_id,
+                    "strategy_key": request.strategy_key,
+                    "broker_provider": self.broker.name,
+                    "broker_order_id": "",
+                    "code": request.code,
+                    "direction": request.direction.value,
+                    "signal_date": request.signal_date,
+                    "planned_execute_date": request.planned_execute_date,
+                    "execute_at": request.execute_at,
+                    "req_price": request.price,
+                    "req_volume": request.volume,
+                    "status": "rejected",
+                    "reason": reason,
+                }
+            )
+            return
+
+        self._live_repo.update_live_order(
+            order_id=request.order_id,
+            status="rejected",
+            broker_order_id=existing.broker_order_id or "",
+            reason=reason,
+        )
 
     def _notify(self, subject: str, body: str) -> None:
         if not self.notifier:

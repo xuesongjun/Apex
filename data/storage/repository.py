@@ -619,6 +619,22 @@ class PaperRepository:
         finally:
             session.close()
 
+    def delete_paper_account_state(self, strategy_name: str) -> None:
+        """删除指定模拟盘账户及其关联状态，用于隔离 rehearsal / validation 数据。"""
+        session = get_session()
+        try:
+            session.query(PaperNav).filter_by(strategy_name=strategy_name).delete(synchronize_session=False)
+            session.query(PaperOrderORM).filter_by(strategy_name=strategy_name).delete(synchronize_session=False)
+            session.query(PaperPositionORM).filter_by(strategy_name=strategy_name).delete(synchronize_session=False)
+            session.query(PaperAccountORM).filter_by(strategy_name=strategy_name).delete(synchronize_session=False)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"删除模拟盘账户状态失败 {strategy_name}: {e}")
+            raise
+        finally:
+            session.close()
+
 
 class LiveRepository:
     """实盘/准实盘数据仓库，封装 live_* 表操作。"""
@@ -834,5 +850,20 @@ class LiveRepository:
                 .order_by(LiveOrderORM.created_at)
                 .all()
             )
+        finally:
+            session.close()
+
+    def delete_live_instance_state(self, instance_id: str) -> None:
+        """删除指定 live 实例及其关联状态，用于隔离 rehearsal / validation 数据。"""
+        session = get_session()
+        try:
+            session.query(LiveOrderORM).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            session.query(LivePositionORM).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            session.query(LiveAccountORM).filter_by(instance_id=instance_id).delete(synchronize_session=False)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"删除 live 实例状态失败 {instance_id}: {e}")
+            raise
         finally:
             session.close()

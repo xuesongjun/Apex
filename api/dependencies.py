@@ -7,12 +7,16 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Query
 
-from data.storage.repository import PaperRepository
+from data.storage.repository import LiveRepository, PaperRepository
 from trading.account_id import build_account_id
 
 
 def get_paper_repository() -> PaperRepository:
     return PaperRepository()
+
+
+def get_live_repository() -> LiveRepository:
+    return LiveRepository()
 
 
 def _split_codes(raw_codes: str | None) -> list[str]:
@@ -64,4 +68,5 @@ def resolve_account_id(
 
 
 PaperRepoDep = Annotated[PaperRepository, Depends(get_paper_repository)]
+LiveRepoDep = Annotated[LiveRepository, Depends(get_live_repository)]
 AccountIdDep = Annotated[str | None, Depends(resolve_account_id)]

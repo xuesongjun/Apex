@@ -41,6 +41,8 @@ def install_fake_xtquant(monkeypatch):
             self.account_type = account_type
 
     class FakeTrader:
+        next_order_id = 10001
+
         def __init__(self, userdata_path, session_id):
             self.userdata_path = userdata_path
             self.session_id = session_id
@@ -74,35 +76,35 @@ def install_fake_xtquant(monkeypatch):
             ]
 
         def order_stock(self, account, stock_code, order_type, volume, price_type, price, strategy_name, remark):
+            order_id = FakeTrader.next_order_id
+            FakeTrader.next_order_id += 1
             self.orders.append({
+                "order_id": order_id,
                 "stock_code": stock_code,
                 "order_type": order_type,
-                "volume": volume,
+                "order_volume": volume,
+                "traded_volume": 0,
+                "order_status": 50,
                 "price_type": price_type,
                 "price": price,
+                "traded_price": 0.0,
+                "commission": 0.0,
                 "strategy_name": strategy_name,
-                "remark": remark,
+                "order_remark": remark,
+                "status_msg": "",
             })
-            return 10001
+            return order_id
 
         def cancel_order_stock(self, account, broker_order_id):
-            return 0
+            for order in self.orders:
+                if order["order_id"] == broker_order_id:
+                    order["order_status"] = 54
+                    order["status_msg"] = "cancelled"
+                    return 0
+            return -1
 
         def query_stock_orders(self, account):
-            return [
-                SimpleNamespace(
-                    order_id=10001,
-                    stock_code="513090.SH",
-                    order_type=23,
-                    order_volume=9000,
-                    traded_volume=0,
-                    order_status=50,
-                    price=1.05,
-                    traded_price=0.0,
-                    commission=0.0,
-                    order_remark="test",
-                )
-            ]
+            return [SimpleNamespace(**order) for order in self.orders]
 
     xttrader_mod.XtQuantTrader = FakeTrader
     xttrader_mod.XtQuantTraderCallback = FakeCallback
@@ -182,3 +184,52 @@ def test_qmt_broker_queries_account_positions_and_submits_order(tmp_path, monkey
     assert saved is not None
     assert saved.broker_order_id == "10001"
     assert saved.status == "submitted"
+
+
+def test_qmt_broker_run_diagnostics_with_test_order(tmp_path, monkeypatch):
+    setup_temp_db(tmp_path, monkeypatch)
+    install_fake_xtquant(monkeypatch)
+
+    broker = QmtBroker(
+        instance_id="overnight_long:test",
+        strategy_key="overnight_long",
+        stock_codes=["513090"],
+        initial_capital=100000.0,
+        provider_name="qmt",
+        account_id="demo-account",
+        userdata_path="/tmp/qmt",
+        session_id=100001,
+        account_type="STOCK",
+        dynamic_price_type="LATEST_PRICE",
+    )
+
+    result = broker.run_diagnostics(
+        BrokerOrderRequest(
+            order_id="diag-order-1",
+            instance_id="overnight_long:test",
+            strategy_key="overnight_long",
+            code="513090",
+            direction=Direction.BUY,
+            signal_date=date(2026, 1, 5),
+            execute_at="open",
+            planned_execute_date=date(2026, 1, 5),
+            price=1.01,
+            volume=100,
+            reason="broker-check",
+        )
+    )
+
+    saved = LiveRepository().get_live_order("diag-order-1")
+
+    assert result["xtquant_imported"] is True
+    assert result["connected"] is True
+    assert result["subscribed"] is True
+    assert result["account"]["cash"] == 120000.0
+    assert result["account"]["total_equity"] == 150000.0
+    assert result["positions_count"] == 1
+    assert result["orders_count"] == 0
+    assert result["test_order"]["submit_status"] == "submitted"
+    assert result["test_order"]["query_status"] == "accepted"
+    assert result["test_order"]["cancel_status"] == "cancelled"
+    assert saved is not None
+    assert saved.status == "cancelled"

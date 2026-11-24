@@ -286,6 +286,64 @@ class QmtBroker(BaseBroker):
             reason=request.reason,
         )
 
+    def run_diagnostics(
+        self,
+        test_order_request: Optional[BrokerOrderRequest] = None,
+    ) -> dict:
+        """
+        QMT / miniQMT 联调诊断。
+
+        默认只做只读检查；只有显式传入 test_order_request 时，才会尝试
+        下测试单、查询订单状态并执行撤单。
+        """
+        self._load_xtquant()
+        self._ensure_ready()
+
+        account = self.get_account()
+        positions = self.get_positions()
+        orders = self.list_orders()
+        result = {
+            "provider": self.name,
+            "account_id": self.account_id,
+            "userdata_path": self.userdata_path,
+            "session_id": self.session_id,
+            "xtquant_imported": True,
+            "connected": True,
+            "subscribed": True,
+            "account": {
+                "cash": account.cash,
+                "total_equity": account.total_equity,
+                "status": account.status,
+            },
+            "positions_count": len(positions),
+            "orders_count": len(orders),
+            "test_order": None,
+        }
+
+        if test_order_request is None:
+            return result
+
+        submitted = self.submit_order(test_order_request)
+        queried_status = ""
+        for order in self.list_orders():
+            if order.broker_order_id == submitted.broker_order_id:
+                queried_status = order.status
+                break
+
+        cancelled = self.cancel_order(test_order_request.order_id)
+        result["test_order"] = {
+            "order_id": submitted.order_id,
+            "broker_order_id": submitted.broker_order_id,
+            "submit_status": submitted.status,
+            "query_status": queried_status,
+            "cancel_status": cancelled.status if cancelled else "missing",
+            "code": submitted.code,
+            "direction": submitted.direction,
+            "req_price": submitted.req_price,
+            "req_volume": submitted.req_volume,
+        }
+        return result
+
     def cancel_order(self, order_id: str) -> BrokerOrder | None:
         self._ensure_ready()
         row = self._repo.get_live_order(order_id)

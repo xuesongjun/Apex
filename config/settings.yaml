@@ -67,6 +67,9 @@ risk_control:
   max_daily_loss: -0.03
   # 最大回撤阈值（触发后暂停策略）
   max_drawdown: -0.10
+  # live 风控兜底默认更宽松；需要时再单独收紧
+  live_max_single_position: 1.00
+  live_max_total_position: 1.00
 
 # 回测默认参数
 backtest:
