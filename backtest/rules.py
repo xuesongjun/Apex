@@ -113,17 +113,32 @@ class TradingRules:
         调整交易数量为合法值
 
         买入：必须为100的整数倍
-        卖出：可以不足100股（零股一次性卖出）
+        卖出：保留原始数量，由 validate_order 决定是否合法
         """
         unit = TradingRules.MIN_TRADE_UNIT
         if direction == Direction.BUY:
             return (volume // unit) * unit
         else:
-            # 卖出时，不足100股可以一次性卖出，超过100股的部分必须为100的整数倍
-            if volume <= unit:
-                return volume
-            remainder = volume % unit
-            return volume  # 卖出允许零股
+            return volume
+
+    @staticmethod
+    def is_valid_sell_volume(volume: int, position_available: int) -> bool:
+        """
+        检查卖出数量是否合法。
+
+        规则：
+        - 1~100 股：允许一次性卖出
+        - 100 的整数倍：允许
+        - 非整手但等于全部可卖持仓：允许（一次性卖出零股/尾股）
+        """
+        unit = TradingRules.MIN_TRADE_UNIT
+        if volume <= 0:
+            return False
+        if volume <= unit:
+            return True
+        if volume % unit == 0:
+            return True
+        return volume == position_available
 
     @staticmethod
     def validate_order(
@@ -165,5 +180,7 @@ class TradingRules:
                 return False, "T+1 限制：今日买入的股票明日才可卖出"
             if signal.volume > position_available:
                 return False, f"卖出数量超出可用持仓：委托 {signal.volume}，可用 {position_available}"
+            if not TradingRules.is_valid_sell_volume(signal.volume, position_available):
+                return False, "卖出数量不合法：超过100股时必须为100的整数倍，除非一次性卖出全部零股"
 
         return True, "通过"

@@ -37,7 +37,7 @@ strategies:
     overbought: 70
     oversold: 30
 
-  # 隔夜多头策略（尾盘买 / 次日开盘卖）
+  # 隔夜多头策略（连续隔夜：T日尾盘买 + T+1日开盘卖）
   overnight_long:
     enabled: true
     min_drop_pct: null    # 当日跌幅阈值（正数百分比），null = 禁用

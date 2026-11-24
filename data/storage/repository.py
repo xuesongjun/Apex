@@ -16,6 +16,9 @@ import uuid
 from data.models import (
     AdjFactor,
     IndexDaily,
+    LiveAccount as LiveAccountORM,
+    LiveOrder as LiveOrderORM,
+    LivePosition as LivePositionORM,
     PaperAccount as PaperAccountORM,
     PaperNav,
     PaperOrder as PaperOrderORM,
@@ -375,6 +378,18 @@ class PaperRepository:
 
     # ========== paper_account ==========
 
+    def list_paper_accounts(self) -> list[PaperAccountORM]:
+        """列出全部模拟盘账户，按最近更新时间倒序。"""
+        session = get_session()
+        try:
+            return (
+                session.query(PaperAccountORM)
+                .order_by(PaperAccountORM.updated_at.desc(), PaperAccountORM.created_at.desc())
+                .all()
+            )
+        finally:
+            session.close()
+
     def get_paper_account(self, strategy_name: str) -> Optional[PaperAccountORM]:
         """获取模拟盘账户"""
         session = get_session()
@@ -413,17 +428,21 @@ class PaperRepository:
         cash: float,
         total_commission: float,
         total_tax: float,
+        stock_codes: Optional[list[str]] = None,
     ) -> None:
         """更新账户资金状态"""
         session = get_session()
         try:
-            session.query(PaperAccountORM).filter_by(
-                strategy_name=strategy_name
-            ).update({
+            update_fields = {
                 "cash": cash,
                 "total_commission": total_commission,
                 "total_tax": total_tax,
-            })
+            }
+            if stock_codes is not None:
+                update_fields["stock_codes"] = json.dumps(stock_codes)
+            session.query(PaperAccountORM).filter_by(
+                strategy_name=strategy_name
+            ).update(update_fields)
             session.commit()
         except Exception as e:
             session.rollback()
@@ -597,5 +616,223 @@ class PaperRepository:
             if end_date:
                 q = q.filter(PaperNav.trade_date <= end_date)
             return q.order_by(PaperNav.trade_date).all()
+        finally:
+            session.close()
+
+
+class LiveRepository:
+    """实盘/准实盘数据仓库，封装 live_* 表操作。"""
+
+    # ========== live_account ==========
+
+    def list_live_accounts(self) -> list[LiveAccountORM]:
+        session = get_session()
+        try:
+            return (
+                session.query(LiveAccountORM)
+                .order_by(LiveAccountORM.updated_at.desc(), LiveAccountORM.created_at.desc())
+                .all()
+            )
+        finally:
+            session.close()
+
+    def get_live_account(self, instance_id: str) -> Optional[LiveAccountORM]:
+        session = get_session()
+        try:
+            return session.query(LiveAccountORM).filter_by(instance_id=instance_id).first()
+        finally:
+            session.close()
+
+    def create_live_account(
+        self,
+        instance_id: str,
+        strategy_key: str,
+        broker_provider: str,
+        broker_account_id: str,
+        initial_capital: float,
+        stock_codes: list[str],
+        cash: float,
+        total_equity: float,
+    ) -> None:
+        session = get_session()
+        try:
+            row = LiveAccountORM(
+                instance_id=instance_id,
+                strategy_key=strategy_key,
+                broker_provider=broker_provider,
+                broker_account_id=broker_account_id,
+                initial_capital=initial_capital,
+                cash=cash,
+                total_equity=total_equity,
+                stock_codes=json.dumps(stock_codes),
+            )
+            session.add(row)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"创建 live_account 失败 {instance_id}: {e}")
+            raise
+        finally:
+            session.close()
+
+    def update_live_account(
+        self,
+        instance_id: str,
+        cash: float,
+        total_equity: float,
+        stock_codes: Optional[list[str]] = None,
+        broker_account_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> None:
+        session = get_session()
+        try:
+            update_fields = {
+                "cash": cash,
+                "total_equity": total_equity,
+            }
+            if stock_codes is not None:
+                update_fields["stock_codes"] = json.dumps(stock_codes)
+            if broker_account_id is not None:
+                update_fields["broker_account_id"] = broker_account_id
+            if status is not None:
+                update_fields["status"] = status
+            session.query(LiveAccountORM).filter_by(instance_id=instance_id).update(update_fields)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"更新 live_account 失败 {instance_id}: {e}")
+            raise
+        finally:
+            session.close()
+
+    # ========== live_position ==========
+
+    def get_live_positions(self, instance_id: str) -> list[LivePositionORM]:
+        session = get_session()
+        try:
+            return (
+                session.query(LivePositionORM)
+                .filter_by(instance_id=instance_id)
+                .order_by(LivePositionORM.code)
+                .all()
+            )
+        finally:
+            session.close()
+
+    def replace_live_positions(self, instance_id: str, positions: list[dict]) -> None:
+        session = get_session()
+        try:
+            keep_codes = {p["code"] for p in positions}
+            if keep_codes:
+                session.query(LivePositionORM).filter(
+                    LivePositionORM.instance_id == instance_id,
+                    ~LivePositionORM.code.in_(keep_codes),
+                ).delete(synchronize_session=False)
+            else:
+                session.query(LivePositionORM).filter_by(instance_id=instance_id).delete()
+
+            if positions:
+                stmt = sqlite_insert(LivePositionORM).values(positions)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["instance_id", "code"],
+                    set_={
+                        "volume": stmt.excluded.volume,
+                        "available": stmt.excluded.available,
+                        "cost_price": stmt.excluded.cost_price,
+                        "current_price": stmt.excluded.current_price,
+                        "source": stmt.excluded.source,
+                    },
+                )
+                session.execute(stmt)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"替换 live_position 失败 {instance_id}: {e}")
+            raise
+        finally:
+            session.close()
+
+    # ========== live_order ==========
+
+    def save_live_order(self, order: dict) -> None:
+        session = get_session()
+        try:
+            session.add(LiveOrderORM(**order))
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"保存 live_order 失败: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_live_order(self, order_id: str) -> Optional[LiveOrderORM]:
+        session = get_session()
+        try:
+            return session.query(LiveOrderORM).filter_by(order_id=order_id).first()
+        finally:
+            session.close()
+
+    def update_live_order(
+        self,
+        order_id: str,
+        status: str,
+        broker_order_id: str = "",
+        filled_price: float = 0.0,
+        filled_volume: int = 0,
+        commission: float = 0.0,
+        reason: str = "",
+    ) -> None:
+        session = get_session()
+        try:
+            session.query(LiveOrderORM).filter_by(order_id=order_id).update({
+                "status": status,
+                "broker_order_id": broker_order_id,
+                "filled_price": filled_price,
+                "filled_volume": filled_volume,
+                "commission": commission,
+                "reason": reason,
+            })
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"更新 live_order 失败 {order_id}: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_live_orders(
+        self,
+        instance_id: str,
+        status: Optional[str] = None,
+        start_date=None,
+        end_date=None,
+    ) -> list[LiveOrderORM]:
+        session = get_session()
+        try:
+            q = session.query(LiveOrderORM).filter_by(instance_id=instance_id)
+            if status:
+                q = q.filter_by(status=status)
+            if start_date:
+                q = q.filter(LiveOrderORM.signal_date >= start_date)
+            if end_date:
+                q = q.filter(LiveOrderORM.signal_date <= end_date)
+            return q.order_by(LiveOrderORM.created_at.desc()).all()
+        finally:
+            session.close()
+
+    def get_due_live_orders(self, instance_id: str, execute_date: date) -> list[LiveOrderORM]:
+        session = get_session()
+        try:
+            return (
+                session.query(LiveOrderORM)
+                .filter_by(
+                    instance_id=instance_id,
+                    status="planned",
+                    planned_execute_date=execute_date,
+                )
+                .order_by(LiveOrderORM.created_at)
+                .all()
+            )
         finally:
             session.close()

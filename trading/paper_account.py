@@ -36,7 +36,12 @@ class PaperAccount:
         total_tax        累计印花税
     """
 
-    def __init__(self, strategy_name: str, initial_capital: float = None):
+    def __init__(
+        self,
+        strategy_name: str,
+        initial_capital: float = None,
+        stock_codes: Optional[list[str]] = None,
+    ):
         """
         参数：
             strategy_name:    账户唯一标识（同策略+参数组合的名称）
@@ -44,6 +49,7 @@ class PaperAccount:
         """
         self.strategy_name = strategy_name
         self._initial_capital_hint = initial_capital
+        self._stock_codes = stock_codes or []
         self._repo = PaperRepository()
         self._fee_model = FeeModel()
 
@@ -89,7 +95,7 @@ class PaperAccount:
                     f"账户 '{self.strategy_name}' 不存在，首次创建必须提供 initial_capital"
                 )
             self._repo.create_paper_account(
-                self.strategy_name, self._initial_capital_hint, []
+                self.strategy_name, self._initial_capital_hint, self._stock_codes
             )
             account_row = self._repo.get_paper_account(self.strategy_name)
         else:
@@ -240,6 +246,7 @@ class PaperAccount:
             cash=self._cash,
             total_commission=self._total_commission,
             total_tax=self._total_tax,
+            stock_codes=self._stock_codes,
         )
 
         # 更新持仓（upsert 现有持仓）

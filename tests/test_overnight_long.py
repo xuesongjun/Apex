@@ -1,25 +1,28 @@
 """
 overnight_long 策略单元测试
 
-覆盖所有信号分支，构造 BarData 直接喂给策略，不依赖数据库/引擎。
+覆盖新语义：
+- 空仓日：BUY @ close + SELL @ next_open
+- 持仓日：SELL @ next_open
+- 过滤参数仅作用于 BUY 分支
 """
 from datetime import date
 
-import pytest
-
 from strategy.base import BarData, Direction, Position
+from strategy.registry import load_strategy
 from strategy.technical.overnight_long import OvernightLongStrategy
 
 
-def make_bar(code="513090", trade_date=None, close=1.0, pre_close=1.0):
-    """构造一根 BarData 便于测试"""
+def make_bar(code="513090", trade_date=None, open_=None, close=1.0, pre_close=1.0):
+    """构造一根 BarData，open 缺省等于 pre_close。"""
     td = trade_date or date(2026, 1, 5)
+    o = open_ if open_ is not None else pre_close
     return BarData(
         code=code,
         trade_date=td,
-        open=pre_close,
-        high=max(pre_close, close),
-        low=min(pre_close, close),
+        open=o,
+        high=max(o, close, pre_close),
+        low=min(o, close, pre_close),
         close=close,
         pre_close=pre_close,
         volume=1_000_000,
@@ -27,126 +30,144 @@ def make_bar(code="513090", trade_date=None, close=1.0, pre_close=1.0):
     )
 
 
-def test_empty_position_generates_buy_signal():
-    """空仓 + 默认参数 → 产生 1 个 BUY 信号，execute_at='close'，volume=0 由引擎解析"""
+def make_position(code="513090", volume=10000, available=10000, buy_date=None):
+    return Position(
+        code=code,
+        volume=volume,
+        available=available,
+        cost_price=1.80,
+        current_price=1.80,
+        buy_date=buy_date or date(2026, 1, 4),
+    )
+
+
+def test_load_strategy_merges_yaml_defaults():
+    """registry 应合并 strategies.yaml 默认参数，而不只用硬编码 default_params。"""
+    strategy = load_strategy("overnight_long")
+
+    assert strategy.config["min_drop_pct"] is None
+    assert strategy.config["max_rise_pct"] is None
+    assert "limit_pct" not in strategy.config
+
+
+def test_empty_position_generates_buy_and_next_open_sell():
+    """空仓 + 默认参数 → 当日 BUY @ close，同时预约明早 SELL @ next_open。"""
     strategy = OvernightLongStrategy()
     bar = make_bar(close=1.80, pre_close=1.82)
 
     signals = strategy.on_bar(bar)
 
-    assert len(signals) == 1
-    s = signals[0]
-    assert s.direction == Direction.BUY
-    assert s.code == "513090"
-    assert s.execute_at == "close"
-    assert s.volume == 0
-    assert s.price == 0
+    assert len(signals) == 2
+    assert signals[0].direction == Direction.BUY
+    assert signals[0].execute_at == "close"
+    assert signals[1].direction == Direction.SELL
+    assert signals[1].execute_at == "next_open"
 
 
-def test_held_position_generates_sell_signal():
-    """有可卖仓位 → 产生 1 个 SELL 信号，execute_at='next_open'"""
+def test_held_position_generates_only_next_open_sell():
+    """已有持仓时，只需要预约明早卖出，不应同日再买。"""
     strategy = OvernightLongStrategy()
-    pos = Position(
-        code="513090",
-        volume=10000,
-        available=10000,
-        cost_price=1.80,
-        current_price=1.80,
-        buy_date=date(2026, 1, 4),
+    strategy._sync_account(
+        positions={"513090": make_position()},
+        cash=0.0,
+        total_value=18000.0,
     )
-    strategy._sync_account(positions={"513090": pos}, cash=0.0, total_value=18000.0)
 
     bar = make_bar(close=1.85, pre_close=1.80)
     signals = strategy.on_bar(bar)
 
     assert len(signals) == 1
-    s = signals[0]
-    assert s.direction == Direction.SELL
-    assert s.execute_at == "next_open"
-    assert s.volume == 0    # 0 = 全部可卖持仓，引擎解析
+    assert signals[0].direction == Direction.SELL
+    assert signals[0].execute_at == "next_open"
 
 
-def test_position_with_zero_available_skips_sell():
-    """T+1 未解冻（available=0）→ 不产 SELL 信号，也不产 BUY（因为 has_position=True）"""
+def test_position_with_zero_available_still_schedules_next_open_sell():
+    """即便 available=0，只要今晚仍会持仓，也应预约明早卖出。"""
     strategy = OvernightLongStrategy()
-    pos = Position(
-        code="513090",
-        volume=10000,
-        available=0,    # 今日刚买入，T+1 未解冻
-        cost_price=1.80,
-        current_price=1.80,
-        buy_date=date(2026, 1, 5),
+    strategy._sync_account(
+        positions={"513090": make_position(available=0, buy_date=date(2026, 1, 5))},
+        cash=0.0,
+        total_value=18000.0,
     )
-    strategy._sync_account(positions={"513090": pos}, cash=0.0, total_value=18000.0)
 
     bar = make_bar(close=1.85, pre_close=1.80)
     signals = strategy.on_bar(bar)
 
-    assert len(signals) == 0
+    assert len(signals) == 1
+    assert signals[0].direction == Direction.SELL
+    assert signals[0].execute_at == "next_open"
 
 
 def test_filters_disabled_by_default_even_on_big_rise():
-    """默认两参数 None → 当日涨 5% 也产 BUY（过滤未生效）"""
+    """默认过滤关闭：空仓日即使大涨，也会 BUY + 预约 SELL。"""
     strategy = OvernightLongStrategy()
-    bar = make_bar(close=1.05, pre_close=1.00)  # 涨 5%
+    bar = make_bar(close=1.05, pre_close=1.00)
     signals = strategy.on_bar(bar)
 
-    assert len(signals) == 1
+    assert len(signals) == 2
     assert signals[0].direction == Direction.BUY
+    assert signals[1].direction == Direction.SELL
 
 
-def test_min_drop_pct_blocks_when_drop_insufficient():
-    """min_drop_pct=3 + 当日跌 2% → 不产 BUY（跌幅不足）"""
+def test_min_drop_pct_blocks_flat_entry():
+    """空仓 + 跌幅不足 → 不买，也不应预约明早卖出。"""
     strategy = OvernightLongStrategy(config={"min_drop_pct": 3.0})
-    bar = make_bar(close=0.98, pre_close=1.00)   # 跌 2%
+    bar = make_bar(close=0.98, pre_close=1.00)
+
     signals = strategy.on_bar(bar)
-    assert len(signals) == 0
+
+    assert signals == []
 
 
-def test_min_drop_pct_allows_when_drop_sufficient():
-    """min_drop_pct=3 + 当日跌 5% → 产 BUY（跌幅达标）"""
+def test_min_drop_pct_keeps_sell_when_holding():
+    """过滤参数只影响 BUY 分支，持仓出场不受影响。"""
     strategy = OvernightLongStrategy(config={"min_drop_pct": 3.0})
-    bar = make_bar(close=0.95, pre_close=1.00)   # 跌 5%
-    signals = strategy.on_bar(bar)
-    assert len(signals) == 1
-    assert signals[0].direction == Direction.BUY
-
-
-def test_max_rise_pct_blocks_when_rise_exceeds():
-    """max_rise_pct=3 + 当日涨 5% → 不产 BUY（涨幅超限）"""
-    strategy = OvernightLongStrategy(config={"max_rise_pct": 3.0})
-    bar = make_bar(close=1.05, pre_close=1.00)   # 涨 5%
-    signals = strategy.on_bar(bar)
-    assert len(signals) == 0
-
-
-def test_two_day_cycle_buy_then_sell_no_rebuy():
-    """
-    T 日空仓 → 产 BUY
-    T+1 日持仓（模拟已买入、T+1 已解冻）→ 产 SELL 且不再产 BUY（C 项守卫）
-    """
-    strategy = OvernightLongStrategy()
-
-    # T 日：空仓
-    bar_t = make_bar(trade_date=date(2026, 1, 5), close=1.80, pre_close=1.82)
-    signals_t = strategy.on_bar(bar_t)
-    assert len(signals_t) == 1
-    assert signals_t[0].direction == Direction.BUY
-
-    # T+1 日：模拟持仓已买入并解冻
-    pos = Position(
-        code="513090",
-        volume=10000,
-        available=10000,
-        cost_price=1.80,
-        current_price=1.80,
-        buy_date=date(2026, 1, 5),
+    strategy._sync_account(
+        positions={"513090": make_position()},
+        cash=0.0,
+        total_value=18000.0,
     )
-    strategy._sync_account(positions={"513090": pos}, cash=0.0, total_value=18000.0)
+    bar = make_bar(close=0.98, pre_close=1.00)
 
-    bar_t1 = make_bar(trade_date=date(2026, 1, 6), close=1.85, pre_close=1.80)
-    signals_t1 = strategy.on_bar(bar_t1)
+    signals = strategy.on_bar(bar)
 
-    assert len(signals_t1) == 1
-    assert signals_t1[0].direction == Direction.SELL
-    assert signals_t1[0].execute_at == "next_open"
+    assert len(signals) == 1
+    assert signals[0].direction == Direction.SELL
+
+
+def test_min_drop_pct_allows_flat_entry_when_drop_sufficient():
+    """空仓 + 跌幅满足阈值 → BUY + 预约 SELL。"""
+    strategy = OvernightLongStrategy(config={"min_drop_pct": 3.0})
+    bar = make_bar(close=0.95, pre_close=1.00)
+
+    signals = strategy.on_bar(bar)
+
+    assert len(signals) == 2
+    assert signals[0].direction == Direction.BUY
+    assert signals[1].direction == Direction.SELL
+
+
+def test_max_rise_pct_blocks_flat_entry():
+    """空仓 + 涨幅超阈值 → 不买，也不应生成 SELL。"""
+    strategy = OvernightLongStrategy(config={"max_rise_pct": 3.0})
+    bar = make_bar(close=1.05, pre_close=1.00)
+
+    signals = strategy.on_bar(bar)
+
+    assert signals == []
+
+
+def test_max_rise_pct_keeps_sell_when_holding():
+    """持仓状态下，即使涨幅超阈值，仍需预约明早卖出。"""
+    strategy = OvernightLongStrategy(config={"max_rise_pct": 3.0})
+    strategy._sync_account(
+        positions={"513090": make_position()},
+        cash=0.0,
+        total_value=18000.0,
+    )
+    bar = make_bar(close=1.05, pre_close=1.00)
+
+    signals = strategy.on_bar(bar)
+
+    assert len(signals) == 1
+    assert signals[0].direction == Direction.SELL

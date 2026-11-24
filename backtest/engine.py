@@ -2,6 +2,7 @@
 回测引擎
 核心模块：加载历史数据 → 按时间回放 → 驱动策略产生信号 → 撮合成交 → 记录结果
 """
+from collections import defaultdict
 from datetime import date, timedelta
 from typing import Optional
 
@@ -39,13 +40,16 @@ class BacktestEngine:
         start_date: date,
         end_date: date,
         initial_capital: float = None,
-        slippage: float = None,
+        slippage_rate: float = None,
     ):
         self.strategy = strategy
         self.stock_codes = stock_codes
         self.start_date = start_date
         self.end_date = end_date
-        self.slippage = slippage or BacktestConfig.slippage
+        # 滑点百分比：None → 回落到 yaml 默认；0 表示无滑点
+        self.slippage_rate = (
+            slippage_rate if slippage_rate is not None else BacktestConfig.slippage_rate
+        )
 
         capital = initial_capital or BacktestConfig.initial_capital
         self.account = Account(capital)
@@ -56,6 +60,10 @@ class BacktestEngine:
         self._orders: list[OrderData] = []
         # 买入记录（用于计算卖出盈亏）
         self._buy_records: dict[str, list[dict]] = {}
+        # 当日动作暂存：{code: {"buy": {...}, "sell": {...}}}；每日末尾聚合后清空
+        self._daily_actions: dict[str, dict] = {}
+        # 次日开盘待执行信号：{execute_date: [Signal, ...]}
+        self._pending_next_open: dict[date, list[Signal]] = defaultdict(list)
 
     def run(self) -> "BacktestResult":
         """
@@ -92,10 +100,13 @@ class BacktestEngine:
             self.account.new_trading_day(td)
 
             bars_today = all_bars[td]
-            signals: list[Signal] = []
-
             # 构建当日 K 线字典（code → bar），price_map 顺带生成
             bar_map: dict[str, BarData] = {bar.code: bar for bar in bars_today}
+
+            # 先执行昨日收盘后预约的 next_open 信号（真正的次日开盘撮合）
+            self._execute_pending_next_open(td, bar_map)
+
+            signals: list[Signal] = []
             self.account.update_prices({code: bar.close for code, bar in bar_map.items()})
 
             # 同步账户状态给策略
@@ -110,17 +121,29 @@ class BacktestEngine:
                 self.strategy._update_bar(bar)
                 signals.extend(self.strategy.on_bar(bar))
 
-            # 处理信号（先卖后买，释放资金）
-            sell_signals = [s for s in signals if s.direction == Direction.SELL]
-            buy_signals = [s for s in signals if s.direction == Direction.BUY]
+            # 处理当日信号：
+            # - open / close：当日立即撮合
+            # - next_open：挂到下一交易日开盘
+            intraday_signals = [s for s in signals if s.execute_at in ("open", "close")]
+            next_open_signals = [s for s in signals if s.execute_at == "next_open"]
+
+            # 当日撮合仍按先卖后买，释放资金
+            sell_signals = [s for s in intraday_signals if s.direction == Direction.SELL]
+            buy_signals = [s for s in intraday_signals if s.direction == Direction.BUY]
 
             for signal in sell_signals:
                 self._process_signal(signal, bar_map)
             for signal in buy_signals:
                 self._process_signal(signal, bar_map)
 
+            next_td = trade_dates[i + 1] if i + 1 < len(trade_dates) else None
+            self._queue_next_open_signals(next_open_signals, next_td)
+
             # 记录当日资产
             self.account.record_equity(td)
+
+            # 聚合当日动作为一行交易明细（需在 record_equity 后，以便读取当日 total_equity）
+            self._finalize_daily_trade(td, bar_map)
 
             # 进度日志
             if (i + 1) % 100 == 0:
@@ -138,6 +161,42 @@ class BacktestEngine:
         logger.info("回测完成!")
         logger.info("=" * 60)
         return result
+
+    def _execute_pending_next_open(self, td: date, bar_map: dict[str, BarData]):
+        """执行上一交易日预约到今天开盘的信号。"""
+        pending = self._pending_next_open.pop(td, [])
+        if not pending:
+            return
+
+        sell_signals = [s for s in pending if s.direction == Direction.SELL]
+        buy_signals = [s for s in pending if s.direction == Direction.BUY]
+        for signal in sell_signals:
+            self._process_signal(signal, bar_map, validate_at="open")
+        for signal in buy_signals:
+            self._process_signal(signal, bar_map, validate_at="open")
+
+    def _queue_next_open_signals(
+        self,
+        signals: list[Signal],
+        execute_date: Optional[date],
+    ):
+        """把 next_open 信号挂到下一交易日。"""
+        if execute_date is None:
+            return
+
+        for signal in signals:
+            self._pending_next_open[execute_date].append(
+                Signal(
+                    code=signal.code,
+                    direction=signal.direction,
+                    trade_date=execute_date,
+                    price=signal.price,
+                    volume=signal.volume,
+                    reason=signal.reason,
+                    confidence=signal.confidence,
+                    execute_at="open",
+                )
+            )
 
     def _load_data(self) -> dict[date, list[BarData]]:
         """
@@ -175,7 +234,12 @@ class BacktestEngine:
 
         return all_bars
 
-    def _process_signal(self, signal: Signal, bar_map: dict[str, BarData]):
+    def _process_signal(
+        self,
+        signal: Signal,
+        bar_map: dict[str, BarData],
+        validate_at: Optional[str] = None,
+    ):
         """处理交易信号：验证 → 撮合 → 成交"""
         bar = bar_map.get(signal.code)
         if bar is None:
@@ -190,11 +254,13 @@ class BacktestEngine:
             # "open" 和 "next_open" 均以当日开盘价模拟
             exec_price = bar.open
 
-        # 加入滑点
-        if signal.direction == Direction.BUY:
-            exec_price += self.slippage
-        else:
-            exec_price -= self.slippage
+        # 加入滑点（百分比模型）：买入向上偏，卖出向下偏；slippage_rate=0 时无摩擦
+        if self.slippage_rate:
+            if signal.direction == Direction.BUY:
+                exec_price *= 1 + self.slippage_rate
+            else:
+                exec_price *= 1 - self.slippage_rate
+            exec_price = round(exec_price, 3)
         exec_price = max(exec_price, 0.01)
 
         # 确定交易量
@@ -218,19 +284,32 @@ class BacktestEngine:
         pos_available = pos.available if pos else 0
 
         # 验证订单合法性
-        valid, reason = TradingRules.validate_order(
-            Signal(
+        check_mode = validate_at or signal.execute_at
+        if check_mode == "open":
+            valid, reason = self._validate_open_order(
                 code=signal.code,
                 direction=signal.direction,
-                trade_date=signal.trade_date,
-                price=exec_price,
+                exec_price=exec_price,
                 volume=volume,
-            ),
-            bar,
-            self.account.cash,
-            pos_volume,
-            pos_available,
-        )
+                bar=bar,
+                available_cash=self.account.cash,
+                position_volume=pos_volume,
+                position_available=pos_available,
+            )
+        else:
+            valid, reason = TradingRules.validate_order(
+                Signal(
+                    code=signal.code,
+                    direction=signal.direction,
+                    trade_date=signal.trade_date,
+                    price=exec_price,
+                    volume=volume,
+                ),
+                bar,
+                self.account.cash,
+                pos_volume,
+                pos_available,
+            )
 
         if not valid:
             logger.debug(f"订单拒绝: {signal.code} {signal.direction.value} - {reason}")
@@ -248,43 +327,146 @@ class BacktestEngine:
         if signal.direction == Direction.BUY:
             order = self.account.process_buy(order)
             if order.status == "filled":
-                # 记录买入
-                if signal.code not in self._buy_records:
-                    self._buy_records[signal.code] = []
-                self._buy_records[signal.code].append({
+                # 记录买入：补存 commission（用于卖出时计算 round-trip 盈亏）
+                self._buy_records.setdefault(signal.code, []).append({
                     "date": signal.trade_date,
                     "price": exec_price,
                     "volume": volume,
+                    "commission": order.commission,
                 })
+                # 暂存当日买入动作（日末聚合到 _trades）
+                self._daily_actions.setdefault(signal.code, {})["buy"] = {
+                    "price": exec_price,
+                    "volume": volume,
+                    "commission": order.commission,
+                }
         else:
-            # 计算卖出盈亏
-            buy_info = self._buy_records.get(signal.code, [{}])
-            buy_price = buy_info[-1].get("price", 0) if buy_info else 0
-            buy_date = buy_info[-1].get("date", signal.trade_date) if buy_info else signal.trade_date
+            # 取最近一笔买入用于 round-trip 结算
+            buy_info = self._buy_records.get(signal.code, [])
+            last_buy = buy_info[-1] if buy_info else {}
+            rt_buy_price = last_buy.get("price", 0)
+            rt_buy_date = last_buy.get("date", signal.trade_date)
+            rt_buy_commission = last_buy.get("commission", 0.0)
 
             order = self.account.process_sell(order)
             if order.status == "filled":
-                profit = (exec_price - buy_price) * volume - order.commission
-                holding_days = (signal.trade_date - buy_date).days
-                self._trades.append({
-                    "code": signal.code,
-                    "direction": "SELL",
-                    "buy_price": buy_price,
-                    "sell_price": exec_price,
+                # 暂存当日卖出动作（含 round-trip 上下文，日末聚合时结算 profit）
+                self._daily_actions.setdefault(signal.code, {})["sell"] = {
+                    "price": exec_price,
                     "volume": volume,
-                    "profit": round(profit, 2),
-                    "profit_pct": round((exec_price / buy_price - 1) * 100, 2) if buy_price > 0 else 0,
-                    "holding_days": holding_days,
-                    "buy_date": buy_date,
-                    "sell_date": signal.trade_date,
+                    "commission": order.commission,
                     "reason": signal.reason,
-                })
-                # 清除买入记录
-                if signal.code in self._buy_records:
+                    "rt_buy_price": rt_buy_price,
+                    "rt_buy_date": rt_buy_date,
+                    "rt_buy_commission": rt_buy_commission,
+                }
+                # 清除最近一条买入记录（round-trip 已闭合）
+                if signal.code in self._buy_records and self._buy_records[signal.code]:
                     self._buy_records[signal.code].pop()
 
         self._orders.append(order)
         self.strategy.on_order(order)
+
+    def _validate_open_order(
+        self,
+        code: str,
+        direction: Direction,
+        exec_price: float,
+        volume: int,
+        bar: BarData,
+        available_cash: float,
+        position_volume: int,
+        position_available: int,
+    ) -> tuple[bool, str]:
+        """按开盘撮合规则校验订单，避免把 open 订单错误套用到 close 涨跌停判定。"""
+        if bar.pre_close > 0:
+            up_limit, down_limit = TradingRules.calc_limit_prices(bar.pre_close, code)
+            if direction == Direction.BUY and exec_price >= up_limit:
+                return False, "开盘涨停，无法买入"
+            if direction == Direction.SELL and exec_price <= down_limit:
+                return False, "开盘跌停，无法卖出"
+
+        if direction == Direction.BUY:
+            rounded = TradingRules.round_volume(volume, Direction.BUY)
+            if rounded <= 0:
+                return False, f"买入数量不足最小交易单位（{TradingRules.MIN_TRADE_UNIT}股）"
+            cost = exec_price * rounded
+            if cost > available_cash:
+                return False, f"资金不足：需要 {cost:.2f}，可用 {available_cash:.2f}"
+            return True, "通过"
+
+        if position_volume <= 0:
+            return False, "无持仓可卖"
+        if position_available <= 0:
+            return False, "T+1 限制：今日买入的股票明日才可卖出"
+        if volume > position_available:
+            return False, f"卖出数量超出可用持仓：委托 {volume}，可用 {position_available}"
+        if not TradingRules.is_valid_sell_volume(volume, position_available):
+            return False, "卖出数量不合法：超过100股时必须为100的整数倍，除非一次性卖出全部零股"
+        return True, "通过"
+
+    def _finalize_daily_trade(self, td: date, bar_map: dict[str, BarData]):
+        """将当日暂存的买/卖动作聚合为 _trades 一行，按 code 分行"""
+        for code, actions in self._daily_actions.items():
+            buy = actions.get("buy")
+            sell = actions.get("sell")
+            if not buy and not sell:
+                continue
+            bar = bar_map.get(code)
+            if bar is None:
+                continue
+
+            commission_total = 0.0
+            if buy:
+                commission_total += buy["commission"]
+            if sell:
+                commission_total += sell["commission"]
+
+            # round-trip 结算归属到"本日卖出"行
+            profit = None
+            profit_pct = None
+            holding_days = None
+            reason = ""
+            if sell:
+                rt_bp = sell["rt_buy_price"]
+                rt_bd = sell["rt_buy_date"]
+                rt_bc = sell["rt_buy_commission"]
+                sp = sell["price"]
+                sv = sell["volume"]
+                sc = sell["commission"]
+                if rt_bp > 0:
+                    profit = (sp - rt_bp) * sv - rt_bc - sc
+                    profit_pct = (sp / rt_bp - 1) * 100
+                    holding_days = (td - rt_bd).days
+                reason = sell["reason"]
+
+            # 动作类型：只买=建仓；只卖=平仓；买+卖=换仓
+            if buy and sell:
+                action = "换仓"
+            elif buy:
+                action = "建仓"
+            else:
+                action = "平仓"
+
+            self._trades.append({
+                "code": code,
+                "trade_date": td,
+                "open": round(bar.open, 3),
+                "close": round(bar.close, 3),
+                "buy_price": round(buy["price"], 3) if buy else None,
+                "sell_price": round(sell["price"], 3) if sell else None,
+                "sell_volume": sell["volume"] if sell else None,
+                "buy_volume": buy["volume"] if buy else None,
+                "commission": round(commission_total, 2),
+                "profit": round(profit, 2) if profit is not None else None,
+                "profit_pct": round(profit_pct, 2) if profit_pct is not None else None,
+                "holding_days": holding_days,
+                "net_equity": round(self.account.total_equity, 2),
+                "action": action,
+                "reason": reason,
+            })
+
+        self._daily_actions = {}
 
     def _build_result(self, trade_dates: list[date]) -> "BacktestResult":
         """构建回测结果"""
@@ -304,12 +486,14 @@ class BacktestEngine:
             benchmark_returns=benchmark_returns,
             total_commission=self.account.total_commission,
             total_tax=self.account.total_tax,
+            initial_capital=self.account.initial_capital,
         )
 
         return BacktestResult(
             strategy_name=self.strategy.name,
             start_date=self.start_date,
             end_date=self.end_date,
+            initial_capital=self.account.initial_capital,
             metrics=metrics,
             equity_curve=self.account.equity_curve,
             trades=self._trades,
@@ -325,6 +509,7 @@ class BacktestResult:
         strategy_name: str,
         start_date: date,
         end_date: date,
+        initial_capital: float,
         metrics: BacktestMetrics,
         equity_curve: list[dict],
         trades: list[dict],
@@ -333,6 +518,7 @@ class BacktestResult:
         self.strategy_name = strategy_name
         self.start_date = start_date
         self.end_date = end_date
+        self.initial_capital = initial_capital
         self.metrics = metrics
         self.equity_curve = equity_curve
         self.trades = trades
@@ -344,7 +530,7 @@ class BacktestResult:
 
         # 获取期末账户数据
         final = self.equity_curve[-1] if self.equity_curve else {}
-        initial_capital = self.equity_curve[0]["total_equity"] if self.equity_curve else 0
+        initial_capital = self.initial_capital
         final_equity = final.get("total_equity", 0)
         final_cash = final.get("cash", 0)
         final_market_value = final.get("market_value", 0)
@@ -408,6 +594,7 @@ class BacktestResult:
             strategy_name=strategy_name,
             start_date=date.today(),
             end_date=date.today(),
+            initial_capital=0.0,
             metrics=_empty_metrics(0, 0),
             equity_curve=[],
             trades=[],

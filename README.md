@@ -42,7 +42,8 @@ A股量化交易系统，涵盖行情数据采集、策略引擎、回测框架�
 │   └── technical/              # 技术指标策略
 │       ├── ma_cross.py         # 均线交叉策略
 │       ├── macd_strategy.py    # MACD 策略
-│       └── limitdown_short.py  # 跌停做空策略
+│       ├── limitdown_short.py  # 跌停做空策略
+│       └── overnight_long.py   # 隔夜多头策略
 ├── backtest/                   # 回测模块
 │   ├── engine.py               # 回测引擎
 │   ├── account.py              # 账户管理
@@ -59,9 +60,12 @@ A股量化交易系统，涵盖行情数据采集、策略引擎、回测框架�
 │   ├── daily_update.py         # 每日数据更新
 │   ├── run_backtest.py         # 策略回测入口
 │   ├── run_paper_trade.py      # 模拟盘运行入口
+│   ├── run_live_trade.py       # 实盘交易基座入口（dry-run / live）
 │   ├── run_limitdown_short.py  # 开盘做空回测策略（独立脚本）
 │   └── query_stock.py          # 数据查询验证工具
-└── requirements.txt
+├── requirements.txt            # 基础运行依赖
+├── requirements-dev.txt        # 开发 / 测试依赖
+└── requirements-strategy.txt   # 可选策略扩展依赖
 ```
 
 ## 快速开始
@@ -76,10 +80,46 @@ python -m venv .venv
 source .venv/bin/activate   # Linux/Mac
 # .venv\Scripts\activate    # Windows
 
+# 基础运行依赖
 pip install -r requirements.txt
+
+# 若需要跑测试 / 本地开发
+pip install -r requirements-dev.txt
+```
+
+### 1.1 依赖分层说明
+
+当前依赖已拆分为三层：
+
+| 文件 | 用途 |
+|------|------|
+| `requirements.txt` | 基础运行依赖（数据、回测、模拟盘、Web API） |
+| `requirements-dev.txt` | 开发与测试依赖（在 `requirements.txt` 基础上增加 pytest 等） |
+| `requirements-strategy.txt` | 可选策略扩展依赖（如 `ta-lib`、`pandas-ta`） |
+
+说明：
+
+- 日常运行项目：安装 `requirements.txt`
+- 开发 / 提交代码 / 跑测试：安装 `requirements-dev.txt`
+- 后续实现依赖重型指标库的策略时，再安装 `requirements-strategy.txt`
+
+```bash
+# 若后续要使用 ta-lib / pandas-ta 相关策略
+pip install -r requirements-strategy.txt
 ```
 
 ### 2. 初始化数据库
+
+`scripts/init_db.py` 用于创建表结构并初始化基础数据。首次运行建议至少完成一次交易日历、股票列表和目标标的日K拉取。
+
+**参数说明：**
+
+| 参数 | 含义 |
+|------|------|
+| `--start YYYY-MM-DD` | 历史数据起始日期，默认 `2020-01-01` |
+| `--tables-only` | 仅创建表结构，不拉取任何数据 |
+| `--stock-list-only` | 仅更新股票列表和交易日历 |
+| `--codes CODE [CODE ...]` | 只拉取指定股票/ETF 的日K |
 
 ```bash
 # 仅创建表结构（快速验证）
@@ -98,6 +138,31 @@ python scripts/init_db.py --stock-list-only
 ### 3. 策略回测
 
 > 若指定的起止日期超出数据库已有范围，脚本会自动提示并给出补数据命令，按提示操作后重新运行即可。
+
+`scripts/run_backtest.py` 是统一的回测入口。当前回测执行时序为：
+
+- `execute_at="close"`：当日收盘价成交
+- `execute_at="open"`：当日开盘价成交
+- `execute_at="next_open"`：**真正挂到下一交易日开盘**成交
+
+因此：
+
+- `ma_cross` / `macd` 这类默认 `next_open` 的策略，信号在 T 日收盘后产生，成交在 T+1 日开盘
+- `overnight_long` 的用户视角是：T 日 14:55 近似收盘价买入，T+1 日开盘卖出，随后 T+1 日 14:55 再买入
+
+**参数说明：**
+
+| 参数 | 含义 |
+|------|------|
+| `--strategy NAME` | 策略名称，当前支持 `ma_cross` / `macd` / `limitdown_short` / `overnight_long` |
+| `--codes CODE [CODE ...]` | 回测标的列表 |
+| `--start YYYY-MM-DD` | 回测开始日期 |
+| `--end YYYY-MM-DD` | 回测结束日期，默认今天 |
+| `--capital N` | 初始资金，默认 `1000000` |
+| `--params key=value ...` | 覆盖策略参数；优先级高于 `config/strategies.yaml` |
+| `--all` | 显示全部交易明细，默认仅显示最近 20 笔 |
+| `--csv FILE` | 导出全部交易明细到 CSV |
+| `--slippage-rate RATE` | 覆盖滑点百分比；`0` 表示无滑点，省略则读取 `settings.yaml` |
 
 ```bash
 # 均线交叉策略
@@ -122,19 +187,70 @@ python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-0
 
 # 导出全部交易明细到 CSV
 python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --csv trades.csv
+
+# 覆盖滑点（百分比，单位：小数；0 表示无滑点，默认读 settings.yaml 的 slippage_rate）
+python scripts/run_backtest.py --strategy ma_cross --codes 000001 --start 2023-01-01 --slippage-rate 0.0005
 ```
+
+**交易明细字段（15 列中文表头，UTF-8 BOM，Excel 可直接打开）：**
+
+明细按**每日一行**组织（**Daily P&L Journal** 风格）：一行 = 一个交易日的所有动作。一行的"动作"列标注 **建仓 / 换仓 / 平仓** 三者之一。
+
+| 列 | 含义 | 建仓行 | 换仓行 | 平仓行 |
+|----|------|:------:|:------:|:------:|
+| 代码 / 日期 / 动作 | 基础上下文 | ✓ | ✓ | ✓ |
+| 开盘价 | 当日 open（bar 参考价，恒填） | ✓ | ✓ | ✓ |
+| 卖出价 | 当日卖出成交价（按策略 `execute_at`，隔夜多头策略下 ≈ 开盘价） | 空 | ✓ | ✓ |
+| 收盘价 | 当日 close（bar 参考价，恒填） | ✓ | ✓ | ✓ |
+| 买入价 | 当日买入成交价（按策略 `execute_at`，隔夜多头策略下 ≈ 收盘价） | ✓ | ✓ | 空 |
+| 卖出份额 | 当日卖出股数 | 空 | ✓ | ✓ |
+| 买入份额 | 当日买入股数（连续隔夜换仓日两者可能不等，因价格变化） | ✓ | ✓ | 空 |
+| 佣金 | **当日**所有成交佣金合计（ETF 无印花税/过户费） | ✓ | ✓ | ✓ |
+| 净盈 | **本次卖出**完成的 round-trip 净盈 = `(卖出价 - 上次买入价) × 卖出份额 - 两端佣金` | 空 | ✓ | ✓ |
+| 收益率% | `(卖出价 / 上次买入价 - 1) × 100` | 空 | ✓ | ✓ |
+| 持仓天数 | 本次卖出日 − 上次买入日 | 空 | ✓ | ✓ |
+| 净值 | 当日收盘后账户总资产 | ✓ | ✓ | ✓ |
+| 动作备注 | 策略返回的 `reason` 字段（主要用于卖出动作） | 空 | ✓ | ✓ |
+
+**口径说明**：
+- "佣金"是**当日口径**（建仓日=买佣金；换仓日=卖佣金+新买佣金；平仓日=卖佣金）
+- "净盈"是**round-trip 口径**，只扣该 round-trip 两端佣金（上次买 + 本次卖），不含当日新建仓的买入佣金
+- 两者因此不严格对齐——想知道"今天一共花了多少手续费"看佣金列；想知道"这笔持仓赚了多少"看净盈列
 
 ```bash
-# 隔夜多头策略（尾盘买 / 次日集合竞价卖）
+# 隔夜多头策略（T 日 14:55 买 + T+1 日开盘卖）
 python scripts/run_backtest.py --strategy overnight_long --codes 513090 --start 2023-01-01 --capital 500000
 
-# 启用涨跌幅过滤（跌幅 ≥ 3% 才买）
+# 启用涨跌幅过滤（跌幅 ≥ 3% 才买，只作用于 BUY 分支）
 python scripts/run_backtest.py --strategy overnight_long --codes 513090 --start 2023-01-01 --params min_drop_pct=3.0
+
+# CLI 参数会覆盖 config/strategies.yaml 的默认配置
+python scripts/run_backtest.py --strategy overnight_long --codes 513090 --start 2023-01-01 \
+    --params min_drop_pct=3.0 max_rise_pct=2.0
 ```
+
+**策略语义**：
+
+- **用户视角**：T 日尾盘买入，T+1 日开盘卖出；若 T+1 日收盘继续满足条件，则再次买入并预约 T+2 日开盘卖出
+- **信号时序**：空仓日返回 `BUY @ close + SELL @ next_open`；持仓日返回 `SELL @ next_open`
+- **过滤参数** `min_drop_pct` / `max_rise_pct` 仅作用于 BUY（是否在今日尾盘建仓）
+- `limit_pct` 已不再作为策略参数；次日开盘卖出能否成交由引擎按真实开盘涨跌停规则判定
 
 ### 4. 开盘做空策略回测
 
 > 模拟"集合竞价挂跌停价卖出（实际以开盘价成交）+ 收盘前买入"的日内做空逻辑。若指定日期超出数据库范围，会自动提示补数据。
+
+**参数说明：**
+
+| 参数 | 含义 |
+|------|------|
+| `--code CODE` | 单一股票/ETF 代码 |
+| `--start YYYY-MM-DD` | 回测开始日期 |
+| `--end YYYY-MM-DD` | 回测结束日期，默认今天 |
+| `--capital N` | 初始资金 |
+| `--shares N` | 固定每笔股数；默认 `0` 表示按可用资金全仓 |
+| `--all` | 显示全部交易明细 |
+| `--csv FILE` | 导出全部交易明细 |
 
 ```bash
 # 基本用法（以开盘价卖出，收盘价买回，每日必然触发）
@@ -196,6 +312,17 @@ python scripts/init_db.py --codes 513090 513100 --start 2023-01-01         # 跨
 
 ### 6. 查询验证数据
 
+`scripts/query_stock.py` 用于核对本地数据库与网络接口数据。
+
+**参数说明：**
+
+| 参数 | 含义 |
+|------|------|
+| `--code, -c CODE` | 股票代码 |
+| `--start, -s YYYY-MM-DD` | 起始日期，默认近 20 天 |
+| `--end, -e YYYY-MM-DD` | 结束日期，默认今天 |
+| `--source db|api|both` | 查询本地、网络或两者对比 |
+
 ```bash
 # 从本地数据库查询
 python scripts/query_stock.py -c 000001 -s 2023-01-03 -e 2023-01-10
@@ -208,6 +335,16 @@ python scripts/query_stock.py -c 000001 -s 2023-01-03 -e 2023-01-10 --source bot
 ```
 
 ### 7. 每日数据更新
+
+`scripts/daily_update.py` 用于收盘后增量更新。
+
+**参数说明：**
+
+| 参数 | 含义 |
+|------|------|
+| `--codes CODE [CODE ...]` | 仅更新指定标的 |
+| `--validate` | 更新后校验最近 7 天数据质量 |
+| `--days N` | 从今天向前回补 N 天数据 |
 
 ```bash
 # 增量更新所有股票（每个交易日收盘后运行）
@@ -303,13 +440,48 @@ strategies:
     fast_period: 12
     slow_period: 26
     signal_period: 9
+  overnight_long:
+    min_drop_pct: null
+    max_rise_pct: null
 ```
+
+说明：
+
+- `strategy/registry.py` 现在会自动读取 `config/strategies.yaml` 作为每个策略的默认参数
+- 命令行 `--params key=value ...` 会覆盖 `strategies.yaml`
+- `overnight_long` 当前可配参数只有：
+  - `min_drop_pct`：当日跌幅至少达到该值才允许尾盘买入
+  - `max_rise_pct`：当日涨幅超过该值则不在尾盘买入
 
 ## 模拟盘交易
 
 > 每日收盘后运行一次，自动执行昨日挂单、生成明日委托，账户状态持久化到数据库。
 
 > **前提**：模拟盘依赖本地数据库中的行情和交易日历数据。运行前请先执行 `python scripts/daily_update.py` 确保数据已更新至当日。若提示"不是交易日"或"无行情数据"，通常是数据库未更新所致。
+
+`scripts/run_paper_trade.py` 当前会根据：
+
+- `--strategy`
+- `--codes`
+- `--params`
+
+生成稳定的 `账户ID`。这意味着：
+
+- 相同策略 / 参数 / 标的组合会继续使用同一个模拟盘账户
+- 只要参数或股票池不同，就会自动隔离为不同账户
+- `--status` / `--history` 必须使用和运行时**完全相同**的 `--strategy --codes --params` 才能查到同一账户
+
+**参数说明：**
+
+| 参数 | 含义 |
+|------|------|
+| `--strategy NAME` | 策略名称 |
+| `--codes CODE [CODE ...]` | 股票代码列表；会参与账户ID生成 |
+| `--capital N` | 初始资金，仅首次创建该账户实例时生效 |
+| `--date YYYY-MM-DD` | 指定运行日期，默认今天；可用于补跑历史 |
+| `--params key=value ...` | 覆盖策略参数；会参与账户ID生成 |
+| `--status` | 只查看账户状态、持仓和待执行订单 |
+| `--history N` | 查看最近 N 天净值记录 |
 
 ```bash
 # 0. 运行前先更新数据（每个交易日收盘后执行）
@@ -323,6 +495,15 @@ python scripts/run_paper_trade.py --strategy limitdown_short --codes 513090 --ca
 
 # 隔夜多头策略（尾盘买 / 次日开盘卖）
 python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 --capital 1000000
+
+# 使用相同组合查看该账户状态
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 --status
+
+# 带过滤参数时，会生成另一个独立账户
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 \
+    --params min_drop_pct=3.0 max_rise_pct=2.0 --capital 1000000
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 \
+    --params min_drop_pct=3.0 max_rise_pct=2.0 --status
 
 # 查看账户当前状态、持仓、待执行订单
 python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --status
@@ -347,8 +528,48 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 | 2 | 加载今日 K 线（停牌标的自动跳过） |
 | 3 | 执行昨日挂单（以今日开盘价成交，涨跌停/停牌自动取消） |
 | 4 | 按今日收盘价更新持仓估值 |
-| 5 | 运行策略，生成信号：`execute_at="next_open"` → 明日挂单；`execute_at="open"/"close"` → 当日立即成交 |
+| 5 | 运行策略：`execute_at="next_open"` → 明日挂单；`execute_at="open"/"close"` → 当日立即成交 |
 | 6 | 记录今日净值快照 |
+
+### overnight_long 模拟盘运行说明
+
+`overnight_long` 在模拟盘中的用户视角是：
+
+1. **T 日 14:55**：以收盘价近似买入
+2. **T+1 日开盘**：执行昨日预约的 `SELL @ next_open`
+3. **T+1 日收盘后**：若满足买入条件，再次买入并预约 T+2 日开盘卖出
+
+建议操作流程：
+
+```bash
+# 第一次运行前，先把目标标的数据补齐
+python scripts/init_db.py --codes 513090 --start 2023-01-01
+
+# 每个交易日收盘后先更新数据
+python scripts/daily_update.py --codes 513090
+
+# 运行 overnight_long 模拟盘
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 --capital 1000000
+
+# 查看账户状态（必须使用相同 --strategy/--codes/--params 组合）
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 --status
+```
+
+若你给 `overnight_long` 加过滤参数，例如：
+
+```bash
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 \
+    --params min_drop_pct=3.0
+```
+
+那么后续查看状态也必须带同样的参数：
+
+```bash
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 \
+    --params min_drop_pct=3.0 --status
+```
+
+否则查到的是另一套账户实例。
 
 **cron 注册（每个工作日 16:30 先更新数据，16:35 再运行模拟盘）：**
 
@@ -368,7 +589,7 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 | `ma_cross` | 均线交叉 | 趋势跟踪，短均线金叉/死叉长均线，次日开盘执行 |
 | `macd` | MACD | 趋势动量，DIF/DEA 金叉死叉，次日开盘执行 |
 | `limitdown_short` | 跌停做空 | 每日开盘卖出（集合竞价）+ 收盘买入，当日执行 |
-| `overnight_long` | 隔夜多头 | 尾盘买入（14:55 近似收盘价）+ 次日集合竞价挂跌停价卖出（开盘成交） |
+| `overnight_long` | 隔夜多头（连续） | 日终视角为“尾盘买入并预约次日开盘卖出”；用户视角为“每日 14:55 买、次日开盘卖” |
 | KDJ | — | 待开发 |
 | 布林带 | — | 待开发 |
 
@@ -391,7 +612,7 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 
 | execute_at | 含义 |
 |-----------|------|
-| `"next_open"`（默认）| 次日开盘价执行，适合趋势策略 |
+| `"next_open"`（默认）| **下一交易日**开盘价执行，会先进入 pending 队列 |
 | `"open"` | 当日开盘价执行（模拟集合竞价挂单） |
 | `"close"` | 当日收盘价执行（模拟尾盘成交） |
 
@@ -402,7 +623,7 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 | T+1 | 当日买入次日才能卖出 |
 | 涨跌停 | 主板 ±10%、创业板/科创板 ±20%、北交所 ±30%、ST ±5%、跨境ETF ±15% |
 | 涨停/跌停 | 涨停无法买入，跌停无法卖出 |
-| 最小单位 | 买入必须为 100 股整数倍 |
+| 最小单位 | 买入必须为 100 股整数倍；卖出超过 100 股时必须为 100 股整数倍，除非一次性卖出全部零股 |
 | 费用 | 佣金 + 印花税（卖出）+ 过户费 |
 
 ## 开发路线图
@@ -415,8 +636,261 @@ python scripts/run_paper_trade.py --strategy ma_cross --codes 000001 --date 2024
 - [ ] Phase 3: 策略库扩展（KDJ、布林带、RSI、多因子）
 - [ ] Phase 4: 风控模块（仓位控制、止损止盈、黑名单）
 - [x] Phase 5: 模拟交易（`scripts/run_paper_trade.py`）
-- [ ] Phase 6: Web 可视化（FastAPI + Vue 3 + ECharts）
-- [ ] Phase 7: 实盘对接（QMT/miniQMT）
+- [x] Phase 6: Web 可视化最小闭环（FastAPI Dashboard API + Vue Dashboard 首屏）
+- [x] Phase 7A: 实盘交易基座（broker 抽象 + DryRunBroker + live engine）
+- [x] Phase 7B: QMT 适配器与计划单激活链（仍需真实环境联调）
+
+## Phase 6 启动方式
+
+当前已落地 **Phase 6A + 6B 最小闭环**：
+
+- 后端：FastAPI 只读 Dashboard API
+- 前端：Vue 3 + TypeScript + Vite 的 Dashboard 首屏
+
+当前 Dashboard 可展示：
+
+- 模拟盘账户列表
+- 账户概览
+- 当前持仓
+- 待执行订单
+- 最近净值曲线
+
+### 后端启动
+
+```bash
+# 项目根目录
+uvicorn api.main:app --reload
+```
+
+默认访问：
+
+- 健康检查：`http://127.0.0.1:8000/health`
+- OpenAPI 文档：`http://127.0.0.1:8000/docs`
+
+主要接口：
+
+- `GET /api/dashboard/accounts`
+- `GET /api/dashboard`
+
+说明：
+
+- Dashboard API 只读，直接复用现有 `PaperRepository`
+- 若数据库中还没有模拟盘账户，页面会显示“暂无模拟盘账户”
+- 建议先运行至少一次 `scripts/run_paper_trade.py` 创建账户后再打开 Dashboard
+
+### 前端启动
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+默认访问：
+
+- `http://127.0.0.1:5173`
+
+如需自定义后端地址，可设置环境变量：
+
+```bash
+VITE_API_BASE=http://127.0.0.1:8000 npm run dev
+```
+
+### 推荐体验顺序
+
+```bash
+# 1. 先确保数据库已有模拟盘账户
+python scripts/run_paper_trade.py --strategy overnight_long --codes 513090 --capital 1000000
+
+# 2. 启后端
+uvicorn api.main:app --reload
+
+# 3. 启前端
+cd frontend
+npm install
+npm run dev
+```
+
+### 当前限制
+
+- 目前只做只读 Dashboard，不包含策略管理写接口
+- 暂未实现 WebSocket，页面数据默认通过 REST 获取
+- 风控中心、回测中心完整页面、实时行情页仍未开始
+
+## Phase 7A / 7B 实盘执行链
+
+当前已落地 **Phase 7A：实盘交易基座**，但这不是“真实券商已接通”的完成态，而是先把：
+
+`策略信号 -> 统一订单请求 -> broker adapter -> 订单结果落库`
+
+这条链路搭起来。
+
+### 当前能力
+
+- 统一 broker 抽象：
+  - `trading/broker/base.py`
+- Dry-run broker：
+  - `trading/broker/dry_run.py`
+- QMT 适配器：
+  - `trading/broker/qmt_broker.py`
+- 实盘执行引擎骨架：
+  - `trading/live_engine.py`
+- 实盘/准实盘持久化表：
+  - `live_account`
+  - `live_position`
+  - `live_order`
+- 实盘 CLI：
+  - `scripts/run_live_trade.py`
+
+### 当前限制与边界
+
+- `dry_run` 仍然是当前推荐模式
+- `QmtBroker` 已实现账户查询 / 持仓查询 / 下单 / 撤单 / 订单查询映射
+- 但 **尚未在真实 QMT / miniQMT 环境中完成联调**
+- DryRunBroker 会把订单请求落库，但**不会模拟真实成交**
+- 邮件通知已接入 live chain，但企业微信 / 个人微信仍未接入
+- 因此当前更适合验证：
+  - 信号是否正确翻译成统一订单请求
+  - live engine 与 broker 抽象是否合理
+  - QMT adapter 在 fake 环境中的映射逻辑是否正确
+
+### broker 配置
+
+编辑 `config/settings.yaml`：
+
+```yaml
+broker:
+  mode: "dry_run"      # dry_run / live
+  provider: "qmt"      # qmt / miniqmt / dummy
+  account_id: ""
+  endpoint: ""
+  timeout: 5
+  qmt:
+    userdata_path: ""
+    session_id: 100001
+    account_type: "STOCK"
+    dynamic_price_type: "LATEST_PRICE"
+    strategy_name: "Apex"
+    order_remark_prefix: "Apex"
+```
+
+说明：
+
+- `mode`：
+  - `dry_run`：当前推荐，安全验证执行链
+  - `live`：启用真实 broker adapter
+- `provider`：
+  - `qmt`：已实现 adapter，但需要真实环境联调
+  - `dummy`：可继续作为 dry-run / 占位用途
+
+### CLI 用法
+
+`scripts/run_live_trade.py` 用于运行实盘交易基座。
+
+**参数说明：**
+
+| 参数 | 含义 |
+|------|------|
+| `--strategy NAME` | 策略名称 |
+| `--codes CODE [CODE ...]` | 股票代码列表 |
+| `--capital N` | 初始资金（仅 dry-run 首次建账户时生效） |
+| `--date YYYY-MM-DD` | 指定运行日期，默认今天 |
+| `--params key=value ...` | 覆盖策略参数 |
+| `--mode dry_run|live` | broker 模式，默认读 `settings.yaml` |
+| `--provider NAME` | broker 提供方，默认读 `settings.yaml` |
+
+### 推荐使用方式（当前阶段）
+
+```bash
+# 1. 确保数据库中已有行情
+python scripts/init_db.py --codes 513090 --start 2023-01-01
+
+# 2. dry-run 跑一次实盘基座（当前最推荐）
+python scripts/run_live_trade.py --strategy overnight_long --codes 513090 --capital 1000000
+```
+
+示例输出会包含：
+
+- 实例ID
+- broker 类型
+- 生成信号数
+- 构建订单数
+- 提交成功/失败数
+
+### dry-run 的意义
+
+当前 `dry_run` 模式不会直接接真实券商，也不会模拟成交回报；它的作用是：
+
+1. 验证策略信号到订单请求的翻译是否正确
+2. 验证订单生命周期能否统一落库
+3. 为后续 `QmtBroker` 真实实现提供稳定接口目标
+
+### QMT live 模式说明
+
+在真实 QMT 环境中，可切到：
+
+```bash
+python scripts/run_live_trade.py --strategy overnight_long --codes 513090 \
+    --mode live --provider qmt
+```
+
+但要满足：
+
+- 已安装 `xtquant`
+- 已有可用 QMT / miniQMT 运行环境
+- `broker.account_id`、`broker.qmt.userdata_path` 等配置完整
+
+当前代码已支持：
+
+- 账户查询
+- 持仓查询
+- 即时订单提交
+- 撤单
+- 订单查询
+- `next_open` 计划单到期激活链路
+- 邮件通知：
+  - 日报摘要
+  - 订单提交失败
+  - 计划单激活失败
+
+但由于当前开发环境没有真实 QMT 客户端，仍需你后续在真实环境完成最终联调。
+
+### 后续仍建议继续补的内容
+
+- 不重写 `live_engine`
+- 再逐步补成交回报、对账、风控联动、通知
+
+### 邮件通知（live chain）
+
+当前 `run_live_trade.py` 和 `LiveEngine` 已接入邮件通知。
+
+支持的通知场景：
+
+- `run_live_trade.py` 运行成功后的日报摘要
+- `run_live_trade.py` 的致命异常
+- broker 提交失败
+- planned `next_open` 订单激活失败
+
+配置方式：
+
+```yaml
+notification:
+  email:
+    enabled: true
+    smtp_server: "smtp.example.com"
+    smtp_port: 465
+    sender: "your@example.com"
+    password: "app-password"
+    receiver: "receiver@example.com"
+```
+
+说明：
+
+- 建议使用邮箱的 SMTP 授权码 / app password
+- 端口 `465` 走 `SMTP_SSL`
+- 其他端口默认走 `SMTP + STARTTLS`
+
+启用后，无需额外 CLI 参数，`run_live_trade.py` 会自动读取配置并发送通知。
 
 ## 免责声明
 

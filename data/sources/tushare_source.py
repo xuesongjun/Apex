@@ -180,9 +180,11 @@ class TushareSource(BaseDataSource):
         self, code: str, start_date: date, end_date: date
     ) -> pd.DataFrame:
         """获取指数日K线"""
-        # tushare 指数代码格式
-        if code.startswith("0"):
-            ts_code = f"{code}.SH"
+        # tushare 指数代码格式：
+        # - 上交所指数常见为 000xxx.SH
+        # - 深交所指数常见为 399xxx.SZ
+        if code.startswith("399"):
+            ts_code = f"{code}.SZ"
         else:
             ts_code = f"{code}.SH"
         logger.debug(f"Tushare: 获取指数日K线 {ts_code}")

@@ -282,6 +282,91 @@ class PaperNav(Base):
     )
 
 
+# ========== 实盘账户 ==========
+class LiveAccount(Base):
+    """
+    实盘/准实盘账户表
+    记录某策略实例在 live/dry-run broker 下的账户快照
+    """
+    __tablename__ = "live_account"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    instance_id      = Column(String(64), nullable=False, unique=True, comment="策略实例ID（稳定哈希）")
+    strategy_key     = Column(String(50), nullable=False, comment="策略 key，如 overnight_long")
+    broker_provider  = Column(String(32), nullable=False, comment="qmt / miniqmt / dummy")
+    broker_account_id = Column(String(64), default="", comment="券商账户ID")
+    initial_capital  = Column(Float, nullable=False, comment="初始资金")
+    cash             = Column(Float, default=0.0, comment="账户现金")
+    total_equity     = Column(Float, default=0.0, comment="账户总资产")
+    stock_codes      = Column(Text, comment="标的列表（JSON 序列化）")
+    status           = Column(String(16), default="active", comment="active / paused / closed")
+    created_at       = Column(DateTime, default=datetime.now)
+    updated_at       = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index("ix_live_account_strategy", "strategy_key"),
+        Index("ix_live_account_provider", "broker_provider"),
+    )
+
+
+# ========== 实盘持仓 ==========
+class LivePosition(Base):
+    """
+    实盘/准实盘持仓快照
+    """
+    __tablename__ = "live_position"
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    instance_id   = Column(String(64), nullable=False, comment="策略实例ID")
+    code          = Column(String(10), nullable=False, comment="股票代码")
+    volume        = Column(Integer, nullable=False, default=0, comment="总持仓量")
+    available     = Column(Integer, nullable=False, default=0, comment="可卖量")
+    cost_price    = Column(Float, nullable=False, default=0.0, comment="成本价")
+    current_price = Column(Float, default=0.0, comment="当前价")
+    source        = Column(String(16), default="broker", comment="broker / manual")
+    updated_at    = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("instance_id", "code", name="uix_live_pos_instance_code"),
+        Index("ix_live_pos_instance", "instance_id"),
+    )
+
+
+# ========== 实盘订单 ==========
+class LiveOrder(Base):
+    """
+    实盘/准实盘订单生命周期记录
+    """
+    __tablename__ = "live_order"
+
+    id                 = Column(Integer, primary_key=True, autoincrement=True)
+    order_id           = Column(String(32), nullable=False, unique=True, comment="系统内部订单ID")
+    instance_id        = Column(String(64), nullable=False, comment="策略实例ID")
+    strategy_key       = Column(String(50), nullable=False, comment="策略 key")
+    broker_provider    = Column(String(32), nullable=False, comment="券商提供方")
+    broker_order_id    = Column(String(64), default="", comment="券商侧订单ID")
+    code               = Column(String(10), nullable=False, comment="股票代码")
+    direction          = Column(String(4), nullable=False, comment="BUY / SELL")
+    signal_date        = Column(Date, nullable=False, comment="信号日期")
+    planned_execute_date = Column(Date, comment="计划执行日")
+    execute_at         = Column(String(16), nullable=False, comment="open / close / next_open")
+    req_price          = Column(Float, default=0.0, comment="请求价格")
+    req_volume         = Column(Integer, nullable=False, comment="请求数量")
+    status             = Column(String(20), nullable=False, default="created",
+                                comment="created / planned / submitted / accepted / rejected / cancelled / filled")
+    filled_price       = Column(Float, default=0.0, comment="成交价格")
+    filled_volume      = Column(Integer, default=0, comment="成交数量")
+    commission         = Column(Float, default=0.0, comment="手续费")
+    reason             = Column(Text, comment="下单原因 / 拒绝原因")
+    created_at         = Column(DateTime, default=datetime.now)
+    updated_at         = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index("ix_live_order_instance_status", "instance_id", "status"),
+        Index("ix_live_order_execute_date", "planned_execute_date"),
+    )
+
+
 # ========== 数据库引擎与会话 ==========
 
 def get_engine():

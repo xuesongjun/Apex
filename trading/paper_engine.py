@@ -43,6 +43,7 @@ class PaperEngine:
         stock_codes: list[str],
         initial_capital: float = 1_000_000.0,
         run_date: Optional[date] = None,
+        account_id: Optional[str] = None,
     ):
         self.strategy = strategy
         self.stock_codes = stock_codes
@@ -51,8 +52,9 @@ class PaperEngine:
 
         self._repo = StockRepository()
         self._paper_repo = PaperRepository()
-        # 账户名 = 策略名（同策略实例可共享同一账户，跨日恢复状态）
-        self.strategy_name = strategy.name
+        # 账户名默认回落到 strategy.name；CLI 入口会传入更稳定的 account_id。
+        self.strategy_name = account_id or strategy.name
+        self.strategy_label = strategy.name
 
     # ── 主入口 ────────────────────────────────────────────────────────────
 
@@ -77,7 +79,11 @@ class PaperEngine:
         logger.info(f"=== 模拟盘运行 [{self.strategy_name}] {run_date} ===")
 
         # ── 步骤1：初始化账户，T+1 解冻 ──
-        account = PaperAccount(self.strategy_name, self.initial_capital)
+        account = PaperAccount(
+            self.strategy_name,
+            self.initial_capital,
+            stock_codes=self.stock_codes,
+        )
         account.load_or_create()
         account.new_trading_day(run_date)
 
@@ -121,7 +127,8 @@ class PaperEngine:
         total_rejected = exec_result["rejected"] + intraday_result["rejected"]
         summary = {
             "run_date": run_date,
-            "strategy": self.strategy_name,
+            "strategy": self.strategy_label,
+            "account_id": self.strategy_name,
             "orders_executed": exec_result["total"],
             "orders_filled": total_filled,
             "orders_cancelled": exec_result["cancelled"],
@@ -214,6 +221,18 @@ class PaperEngine:
                     result["cancelled"] += 1
                     continue
 
+            if direction == Direction.SELL:
+                pos = account.positions.get(order_row.code)
+                available = pos.available if pos else 0
+                if not TradingRules.is_valid_sell_volume(order_row.req_volume, available):
+                    self._paper_repo.update_paper_order(
+                        order_row.order_id,
+                        "rejected",
+                        reason="卖出数量不合法：超过100股时必须为100的整数倍，除非一次性卖出全部零股",
+                    )
+                    result["rejected"] += 1
+                    continue
+
             # 构建 OrderData 并交给 account 处理
             od = OrderData(
                 code=order_row.code,
@@ -284,6 +303,10 @@ class PaperEngine:
                     pos = account.positions.get(signal.code)
                     if not pos or pos.available <= 0:
                         logger.debug(f"当日卖出信号跳过 {signal.code}：T+1 限制")
+                        result["rejected"] += 1
+                        continue
+                    if not TradingRules.is_valid_sell_volume(volume, pos.available):
+                        logger.debug(f"当日卖出信号跳过 {signal.code}：卖出数量不合法")
                         result["rejected"] += 1
                         continue
 
@@ -395,16 +418,20 @@ class PaperEngine:
         """将今日信号转为明日 pending 订单，返回创建的订单数"""
         count = 0
         for signal in signals:
-            volume = self._resolve_volume(signal, account, bar_map)
+            volume = self._resolve_volume(signal, account, bar_map, pending_next_open=True)
             if volume <= 0:
                 logger.debug(f"跳过信号 {signal.code}：量为0（资金不足或无可卖持仓）")
                 continue
 
-            # 卖出 T+1 检查：available=0 的持仓不能挂卖单
+            # next_open 卖单允许为“今日尾盘刚买、明早开盘卖”的仓位预约挂单，
+            # 因此创建 pending 时只要求期末有持仓，不要求 available>0。
             if signal.direction == Direction.SELL:
                 pos = account.positions.get(signal.code)
-                if not pos or pos.available <= 0:
-                    logger.debug(f"跳过卖出信号 {signal.code}：T+1 限制，无可卖持仓")
+                if not pos or pos.volume <= 0:
+                    logger.debug(f"跳过卖出信号 {signal.code}：无持仓")
+                    continue
+                if not TradingRules.is_valid_sell_volume(volume, pos.volume):
+                    logger.debug(f"跳过卖出信号 {signal.code}：卖出数量不合法")
                     continue
 
             self._paper_repo.save_paper_order({
@@ -430,12 +457,15 @@ class PaperEngine:
         signal: Signal,
         account: PaperAccount,
         bar_map: dict[str, BarData],
+        pending_next_open: bool = False,
     ) -> int:
         """
         解析委托数量：
         - signal.volume > 0：使用策略指定量（四舍五入到100股整数倍）
         - signal.volume == 0 且买入：用账户 95% 可用现金估算最大量
-        - signal.volume == 0 且卖出：默认全部可卖持仓
+        - signal.volume == 0 且卖出：
+            - 当日信号：默认全部可卖持仓
+            - next_open pending：默认卖出当前总持仓（包括今日尾盘刚买、明早解冻的仓位）
         """
         if signal.volume > 0:
             return TradingRules.round_volume(signal.volume, signal.direction)
@@ -449,7 +479,9 @@ class PaperEngine:
             return TradingRules.round_volume(max_vol, Direction.BUY)
         else:
             pos = account.positions.get(signal.code)
-            return pos.available if pos else 0
+            if not pos:
+                return 0
+            return pos.volume if pending_next_open else pos.available
 
     # ── 工具 ──────────────────────────────────────────────────────────────
 

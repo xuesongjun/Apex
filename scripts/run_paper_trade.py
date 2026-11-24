@@ -36,6 +36,7 @@ from data.models import init_db
 from data.storage.repository import PaperRepository, StockRepository
 from strategy.base import Direction
 from strategy.registry import STRATEGY_REGISTRY, load_strategy
+from trading.account_id import build_account_id
 from trading.paper_account import PaperAccount
 from trading.paper_engine import PaperEngine
 
@@ -55,6 +56,7 @@ def parse_params(param_strings: list[str]) -> dict:
                 pass
         params[key] = value
     return params
+
 
 
 # ── 输出工具（中文对齐）──────────────────────────────────────────────────
@@ -81,18 +83,18 @@ def _rjust(s: str, width: int) -> str:
 
 # ── 状态查看 ─────────────────────────────────────────────────────────────
 
-def print_status(strategy_name: str):
+def print_status(account_id: str, strategy_label: str):
     """打印账户当前状态、持仓和待执行订单"""
     repo = PaperRepository()
     stock_repo = StockRepository()
 
-    account_row = repo.get_paper_account(strategy_name)
+    account_row = repo.get_paper_account(account_id)
     if account_row is None:
-        print(f"\n[错误] 账户 '{strategy_name}' 不存在，请先运行不带 --status 的命令初始化账户")
+        print(f"\n[错误] 账户 '{account_id}' 不存在，请先用相同策略/参数/股票列表运行一次")
         return
 
-    positions = repo.get_paper_positions(strategy_name)
-    pending = [o for o in repo.get_order_history(strategy_name) if o.status == "pending"]
+    positions = repo.get_paper_positions(account_id)
+    pending = [o for o in repo.get_order_history(account_id) if o.status == "pending"]
 
     total_market_value = sum(
         p.volume * p.current_price for p in positions
@@ -102,7 +104,8 @@ def print_status(strategy_name: str):
 
     W = 60
     print("\n" + "=" * W)
-    print(f"  模拟盘账户状态：{strategy_name}")
+    print(f"  模拟盘账户状态：{strategy_label}")
+    print(f"  账户ID：{account_id}")
     print("=" * W)
 
     print("\n【账户概览】")
@@ -157,20 +160,21 @@ def print_status(strategy_name: str):
     print("=" * W)
 
 
-def print_history(strategy_name: str, days: int):
+def print_history(account_id: str, strategy_label: str, days: int):
     """打印最近 N 天的净值记录"""
     repo = PaperRepository()
-    nav_series = repo.get_nav_series(strategy_name)
+    nav_series = repo.get_nav_series(account_id)
     if not nav_series:
-        print(f"\n账户 '{strategy_name}' 无净值记录")
+        print(f"\n账户 '{account_id}' 无净值记录")
         return
 
     rows = nav_series[-days:]
-    account_row = repo.get_paper_account(strategy_name)
+    account_row = repo.get_paper_account(account_id)
     initial = account_row.initial_capital if account_row else 1.0
 
     W = 72
-    print(f"\n净值记录：{strategy_name}（最近 {len(rows)} 条，共 {len(nav_series)} 条）")
+    print(f"\n净值记录：{strategy_label}（最近 {len(rows)} 条，共 {len(nav_series)} 条）")
+    print(f"账户ID：{account_id}")
     print("─" * W)
     C = [12, 12, 12, 10, 10, 10, 8]
     SEP = "  "
@@ -204,6 +208,7 @@ def print_summary(summary: dict):
     nav = summary.get("nav", 1.0)
     print("\n" + "=" * W)
     print(f"  模拟盘日报：{summary['strategy']}  {summary['run_date']}")
+    print(f"  账户ID：{summary['account_id']}")
     print("=" * W)
     print(f"\n  今日执行：{summary['orders_filled']} 笔成交 / "
           f"{summary['orders_cancelled']} 笔取消 / "
@@ -240,17 +245,16 @@ def main():
     setup_logging()
     init_db()  # 确保含新增的4张模拟盘表都已建好
 
-    strategy = load_strategy(args.strategy, parse_params(args.params))
-
-    # 账户名 = 策略名（不含参数，同策略共享一个账户）
-    # 若需要同策略多套参数隔离运行，可以手动修改此处拼接参数后缀
+    params = parse_params(args.params)
+    strategy = load_strategy(args.strategy, params)
+    account_id = build_account_id(args.strategy, args.codes, params)
 
     if args.status:
-        print_status(strategy.name)
+        print_status(account_id, strategy.name)
         return
 
     if args.history > 0:
-        print_history(strategy.name, args.history)
+        print_history(account_id, strategy.name, args.history)
         return
 
     run_date = (
@@ -263,6 +267,7 @@ def main():
         stock_codes=args.codes,
         initial_capital=args.capital,
         run_date=run_date,
+        account_id=account_id,
     )
     summary = engine.run_daily()
     print_summary(summary)
